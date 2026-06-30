@@ -1,0 +1,118 @@
+"use client";
+
+import { useMontage } from "@/hooks/useMontage";
+import Dropzone from "@/components/Dropzone";
+import ClipTray from "@/components/ClipTray";
+import Controls from "@/components/Controls";
+import Stage from "@/components/Stage";
+
+export default function MontageStudio() {
+  const m = useMontage();
+  const ready = m.status === "ready" && !!m.audioUrl;
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+      {/* ----------------------------- Scène ----------------------------- */}
+      <section className="order-2 lg:order-1">
+        <Stage
+          canvasRef={m.canvasRef}
+          flashRef={m.flashRef}
+          playheadRef={m.playheadRef}
+          timeLabelRef={m.timeLabelRef}
+          renderSize={m.renderSize}
+          analysis={m.analysis}
+          segments={m.segments}
+          isPlaying={m.isPlaying}
+          ready={ready}
+          hasClips={m.clips.length > 0}
+          onTogglePlay={m.togglePlay}
+          onSeekRatio={m.seekToRatio}
+        />
+
+        {/* Élément audio = horloge maître (caché, on pilote via le canvas). */}
+        {m.audioUrl && (
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <audio
+            ref={m.audioRef}
+            src={m.audioUrl}
+            onEnded={m.onEnded}
+            className="hidden"
+          />
+        )}
+
+        {m.audioMeta && (
+          <p className="mt-3 truncate text-xs text-zinc-500">
+            🎵 {m.audioMeta.name}
+          </p>
+        )}
+      </section>
+
+      {/* --------------------------- Panneau ----------------------------- */}
+      <aside className="order-1 space-y-6 lg:order-2">
+        {/* Audio */}
+        <div className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+            1 · La musique
+          </h2>
+          <Dropzone
+            accept="audio/*"
+            onFiles={(files) => {
+              const f = Array.from(files)[0];
+              if (f) void m.loadAudio(f);
+            }}
+            title={m.audioMeta ? "Changer de musique" : "Importer un morceau"}
+            hint="MP3, WAV, M4A — glisser-déposer ou cliquer"
+            icon="♫"
+          />
+          {m.status === "analyzing" && (
+            <p className="flex items-center gap-2 text-xs text-accent">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+              Analyse des beats…
+            </p>
+          )}
+          {m.error && <p className="text-xs text-beat">{m.error}</p>}
+        </div>
+
+        {/* Clips */}
+        <div className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+            2 · Les clips
+          </h2>
+          <Dropzone
+            accept="video/*"
+            multiple
+            onFiles={m.addClips}
+            title="Ajouter des clips"
+            hint="Plusieurs fichiers vidéo — ils défilent en rythme"
+            icon="🎞"
+          />
+          <ClipTray
+            clips={m.clips}
+            registerVideo={m.registerVideo}
+            onRemove={m.removeClip}
+            onClear={m.clearClips}
+          />
+        </div>
+
+        {/* Réglages */}
+        {ready && (
+          <div className="space-y-3">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+              3 · Le montage
+            </h2>
+            <Controls
+              sensitivity={m.sensitivity}
+              cutEvery={m.cutEvery}
+              onSensitivity={m.setSensitivity}
+              onCutEvery={m.setCutEvery}
+              bpm={m.bpm}
+              beatCount={m.beatCount}
+              cutCount={m.cutCount}
+              disabled={!ready}
+            />
+          </div>
+        )}
+      </aside>
+    </div>
+  );
+}

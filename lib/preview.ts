@@ -1,0 +1,88 @@
+/**
+ * preview.ts
+ * ----------------------------------------------------------------------------
+ * Petites fonctions pures qui font le pont entre l'EDL (données) et la preview
+ * (pixels). On garde le moteur (`montage-engine.ts`) sans dépendance au DOM ;
+ * tout ce qui touche au <canvas> / aux temps d'affichage vit ici.
+ * ----------------------------------------------------------------------------
+ */
+
+/** Un segment de montage = un morceau de timeline montrant un clip donné. */
+export interface Segment {
+  start: number;
+  end: number;
+  sourceIndex: number;
+}
+
+/** Un clip vidéo importé par l'utilisateur. */
+export interface Clip {
+  id: string;
+  name: string;
+  url: string;
+}
+
+/**
+ * Index du segment actif pour le temps `t`. Optimisé pour la lecture : on part
+ * d'un indice « indice » (le dernier connu) et on avance/recule de proche en
+ * proche, ce qui rend le cas « frame suivante » en O(1). Retombe sur une
+ * recherche linéaire bornée si l'indice de départ est loin (ex. après un seek).
+ *
+ * Renvoie -1 si `segments` est vide ou si `t` précède le premier segment.
+ */
+export function findSegmentIndex(
+  segments: Segment[],
+  t: number,
+  hint = 0
+): number {
+  const n = segments.length;
+  if (n === 0) return -1;
+
+  let i = hint;
+  if (i < 0) i = 0;
+  if (i > n - 1) i = n - 1;
+
+  // Avance tant que t dépasse la fin du segment courant.
+  while (i < n - 1 && t >= segments[i].end) i++;
+  // Recule tant que t précède le début du segment courant (cas seek arrière).
+  while (i > 0 && t < segments[i].start) i--;
+
+  // Avant le tout premier segment : rien à montrer.
+  if (t < segments[0].start) return -1;
+  return i;
+}
+
+/**
+ * Dessine une frame vidéo sur le canvas en mode « cover » (remplit tout le
+ * cadre, recadre au centre, garde le ratio). Ne fait rien si la vidéo n'a pas
+ * encore de dimensions (métadonnées non chargées).
+ */
+export function drawCover(
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement,
+  cw: number,
+  ch: number
+): boolean {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return false;
+
+  const scale = Math.max(cw / vw, ch / vh);
+  const dw = vw * scale;
+  const dh = vh * scale;
+  const dx = (cw - dw) / 2;
+  const dy = (ch - dh) / 2;
+  ctx.drawImage(video, dx, dy, dw, dh);
+  return true;
+}
+
+/** Formate un nombre de secondes en `m:ss` (ou `m:ss.d` avec décimales). */
+export function formatTime(sec: number, decimals = 0): string {
+  if (!Number.isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60);
+  const s = sec - m * 60;
+  if (decimals > 0) {
+    const ss = s.toFixed(decimals).padStart(3 + decimals, "0");
+    return `${m}:${ss}`;
+  }
+  return `${m}:${Math.floor(s).toString().padStart(2, "0")}`;
+}
