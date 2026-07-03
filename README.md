@@ -35,6 +35,11 @@ npm run lint                 # ESLint (next/core-web-vitals)
      changement de sensibilité).
    - `buildEDL()` / `assignClipsToCuts()` : transforme les beats en points de
      coupe puis en segments `{ start, end, sourceIndex }`.
+   - `computeEnergyCurve()` / `classifyBeats()` / `buildDynamicEDL()` :
+     **montage dynamique** — niveau d'énergie du morceau (0-1, lissé ~2 s,
+     normalisé par morceau), beats classés low/mid/high, et cadence modulée
+     autour de la base : ×2 au calme, ÷2 quand ça tape. Chaque segment expose
+     son énergie moyenne et sa zone (base de la future couche apprentissage).
 2. **`lib/preview.ts`** — pont EDL → preview : `computeInPoints()` donne à
    chaque segment son point d'entrée dans le clip (proportionnel à la position
    dans le morceau), `findSegmentIndex()` suit le segment actif.
@@ -51,10 +56,11 @@ npm run lint                 # ESLint (next/core-web-vitals)
 
 ## Réglages
 
-| Réglage           | Effet                                                          |
-| ----------------- | -------------------------------------------------------------- |
-| **Sensibilité**   | Plus bas = plus de beats. Plus haut = on garde les plus forts. |
-| **Couper tous N** | Nervosité du montage : 1 = nerveux, 4+ = posé.                 |
+| Réglage                | Effet                                                                                       |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| **Sensibilité**        | Plus bas = plus de beats. Plus haut = on garde les plus forts.                              |
+| **Cadence (base)**     | Couper tous les N beats : 1 = nerveux, 4+ = posé.                                           |
+| **Montage dynamique**  | ON (défaut) : l'énergie module la cadence (low ×2, high ÷2) + punch-in sur les coupes high. |
 
 ## Déploiement
 

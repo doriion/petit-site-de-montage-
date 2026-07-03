@@ -3,8 +3,10 @@
 interface ControlsProps {
   sensitivity: number;
   cutEvery: number;
+  dynamicCut: boolean;
   onSensitivity: (v: number) => void;
   onCutEvery: (v: number) => void;
+  onDynamicCut: (v: boolean) => void;
   bpm: number;
   beatCount: number;
   cutCount: number;
@@ -22,13 +24,16 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-/** Les deux réglages qui comptent : sensibilité (combien de beats) et nervosité
- *  du montage (couper tous les N beats). Plus les stats live de l'analyse. */
+/** Les réglages qui comptent : sensibilité (combien de beats), cadence de
+ *  coupe, et montage dynamique (l'énergie du morceau module la cadence).
+ *  Plus les stats live de l'analyse. */
 export default function Controls({
   sensitivity,
   cutEvery,
+  dynamicCut,
   onSensitivity,
   onCutEvery,
+  onDynamicCut,
   bpm,
   beatCount,
   cutCount,
@@ -70,7 +75,9 @@ export default function Controls({
       <div className="space-y-2">
         <div className="flex items-baseline justify-between">
           <label htmlFor="cutEvery" className="text-sm font-medium text-zinc-200">
-            Couper tous les {cutEvery} beat{cutEvery > 1 ? "s" : ""}
+            {dynamicCut
+              ? `Cadence de base : ${cutEvery} beat${cutEvery > 1 ? "s" : ""}`
+              : `Couper tous les ${cutEvery} beat${cutEvery > 1 ? "s" : ""}`}
           </label>
           <span className="font-mono text-xs text-accent">{cutEvery}</span>
         </div>
@@ -86,8 +93,41 @@ export default function Controls({
           className="slider"
         />
         <p className="text-[11px] text-zinc-500">
-          1 = nerveux · 4+ = posé
+          {dynamicCut
+            ? "l'énergie module autour de cette base : ×2 au calme, ÷2 quand ça tape"
+            : "1 = nerveux · 4+ = posé"}
         </p>
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <span
+            id="dynamicCutLabel"
+            className="block text-sm font-medium text-zinc-200"
+          >
+            Montage dynamique
+          </span>
+          <p className="text-[11px] text-zinc-500">
+            Coupes posées au calme, nerveuses + punch-in quand ça tape
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={dynamicCut}
+          aria-labelledby="dynamicCutLabel"
+          disabled={disabled}
+          onClick={() => onDynamicCut(!dynamicCut)}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            dynamicCut ? "bg-accent" : "bg-ink-600"
+          }`}
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+              dynamicCut ? "left-[22px]" : "left-0.5"
+            }`}
+          />
+        </button>
       </div>
     </div>
   );

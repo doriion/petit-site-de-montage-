@@ -26,10 +26,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   analyzeEnvelope,
   assignClipsToCuts,
+  buildDynamicEDL,
   buildEDL,
+  computeEnergyCurve,
   decodeAudio,
+  energyBetween,
   pickBeats,
   type BeatAnalysis,
+  type EnergyCurve,
   type Envelope,
 } from "@/lib/montage-engine";
 import {
@@ -73,6 +77,7 @@ export function useMontage() {
   const [segments, setSegments] = useState<Segment[]>([]);
   const [sensitivity, setSensitivity] = useState(1.45);
   const [cutEvery, setCutEvery] = useState(2);
+  const [dynamicCut, setDynamicCut] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
 
   /* --------------------------------- refs -------------------------------- */
@@ -84,6 +89,7 @@ export function useMontage() {
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const envelopeRef = useRef<Envelope | null>(null);
+  const curveRef = useRef<EnergyCurve | null>(null);
 
   // Les deux slots de lecture (voir lib/player.ts). Init paresseuse.
   const slotsRef = useRef<[VideoSlot, VideoSlot] | null>(null);
@@ -97,6 +103,7 @@ export function useMontage() {
   const durationRef = useRef(0);
   const segIndexRef = useRef(-1);
   const flashOpacityRef = useRef(0);
+  const punchZoomRef = useRef(0); // punch-in : surplus de zoom, décroît à chaque frame
   const rafRef = useRef(0);
   const playingRef = useRef(false);
   const renderFrameRef = useRef<() => void>(() => {});
@@ -157,6 +164,7 @@ export function useMontage() {
         const audioBuffer = await decodeAudio(buf, getAudioCtx());
         const env = analyzeEnvelope(audioBuffer);
         envelopeRef.current = env;
+        curveRef.current = computeEnergyCurve(env);
         durationRef.current = audioBuffer.duration;
 
         // Premier pick tout de suite (l'effet [sensitivity] gérera la suite).
@@ -322,7 +330,11 @@ export function useMontage() {
     const segs = segmentsRef.current;
     const idx = findSegmentIndex(segs, t, Math.max(0, segIndexRef.current));
     if (idx !== segIndexRef.current) {
-      if (idx >= 0 && segIndexRef.current >= 0) flashOpacityRef.current = 0.85;
+      if (idx >= 0 && segIndexRef.current >= 0) {
+        flashOpacityRef.current = 0.85;
+        // Punch-in uniquement sur les coupes en zone high (montage dynamique).
+        if (segs[idx].zone === "high") punchZoomRef.current = 0.05;
+      }
       segIndexRef.current = idx;
       activateSegment(idx, false);
     }
@@ -331,7 +343,7 @@ export function useMontage() {
       const slot = slotsRef.current[currentSlotIdxRef.current];
       const v = slot.el;
       if (v && slot.preparedSeg === idx && v.readyState >= 2) {
-        drawCover(ctx, v, canvas.width, canvas.height);
+        drawCover(ctx, v, canvas.width, canvas.height, 1 + punchZoomRef.current);
       }
       // Sinon : préparation en cours → on fige la dernière frame dessinée
       // plutôt que de flasher du noir.
@@ -339,6 +351,10 @@ export function useMontage() {
       ctx.fillStyle = "#0a0a0f";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
+
+    // Décroissance du punch-in (frame-synced, ~1/3 s).
+    punchZoomRef.current *= 0.88;
+    if (punchZoomRef.current < 0.002) punchZoomRef.current = 0;
 
     // Décroissance du flash (frame-synced).
     if (flashRef.current) {
@@ -445,19 +461,39 @@ export function useMontage() {
     setAnalysis(a);
   }, [sensitivity]);
 
-  // (Re)calcul des segments : EDL → clips → inPoints.
+  // (Re)calcul des segments : EDL (fixe ou dynamique) → clips → inPoints →
+  // annotation énergie/zone (exposée pour la couche apprentissage).
   useEffect(() => {
     if (!analysis) {
       setSegments([]);
       return;
     }
-    const edl = buildEDL(analysis, cutEvery);
+    const curve = curveRef.current;
+    const edl =
+      dynamicCut && curve
+        ? buildDynamicEDL(analysis, curve, cutEvery)
+        : buildEDL(analysis, cutEvery);
     const count = Math.max(1, clips.length);
     let segs: Segment[] = assignClipsToCuts(edl, count, analysis.duration);
 
+    // assignClipsToCuts fait coupe i → segment i : on reporte la zone de la
+    // coupe, et l'énergie moyenne du morceau sur l'intervalle du segment.
+    segs = segs.map((s, i) => ({
+      ...s,
+      zone: edl.cuts[i]?.zone,
+      energy: curve ? energyBetween(curve, s.start, s.end) : edl.cuts[i]?.energy,
+    }));
+
     // Aucun beat : on montre quand même le 1er clip sur tout le morceau.
     if (segs.length === 0 && analysis.duration > 0) {
-      segs = [{ start: 0, end: analysis.duration, sourceIndex: 0 }];
+      segs = [
+        {
+          start: 0,
+          end: analysis.duration,
+          sourceIndex: 0,
+          energy: curve ? energyBetween(curve, 0, analysis.duration) : undefined,
+        },
+      ];
     }
     // Couvre l'intro (avant le 1er beat) avec le premier segment.
     if (segs.length > 0 && segs[0].start > 0) {
@@ -466,7 +502,7 @@ export function useMontage() {
 
     const durs = clips.map((c) => clipDurations.get(c.id));
     setSegments(computeInPoints(segs, durs, analysis.duration));
-  }, [analysis, cutEvery, clips, clipDurations]);
+  }, [analysis, cutEvery, dynamicCut, clips, clipDurations]);
 
   // Nouveau mapping segments/clips : tout ce qui est préparé est caduc.
   // On re-prépare à la position courante (et on redessine si à l'arrêt).
@@ -524,6 +560,7 @@ export function useMontage() {
     segments,
     sensitivity,
     cutEvery,
+    dynamicCut,
     isPlaying,
 
     // dérivés
@@ -538,6 +575,7 @@ export function useMontage() {
     clearClips,
     setSensitivity,
     setCutEvery,
+    setDynamicCut,
     togglePlay,
     seekToRatio,
     onEnded,

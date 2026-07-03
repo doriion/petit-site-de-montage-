@@ -7,6 +7,8 @@
  * ----------------------------------------------------------------------------
  */
 
+import type { EnergyZone } from "./montage-engine";
+
 /** Un segment de montage = un morceau de timeline montrant un clip donné. */
 export interface Segment {
   start: number;
@@ -17,6 +19,10 @@ export interface Segment {
    * segment. Absent/0 tant que la durée du clip n'est pas connue.
    */
   inPoint?: number;
+  /** Énergie moyenne normalisée (0-1) du morceau sur ce segment. */
+  energy?: number;
+  /** Zone d'énergie de la coupe qui ouvre ce segment (montage dynamique). */
+  zone?: EnergyZone;
 }
 
 /** Un clip vidéo importé par l'utilisateur. */
@@ -89,20 +95,22 @@ export function findSegmentIndex(
 
 /**
  * Dessine une frame vidéo sur le canvas en mode « cover » (remplit tout le
- * cadre, recadre au centre, garde le ratio). Ne fait rien si la vidéo n'a pas
- * encore de dimensions (métadonnées non chargées).
+ * cadre, recadre au centre, garde le ratio). `zoom` > 1 agrandit autour du
+ * centre (punch-in). Ne fait rien si la vidéo n'a pas encore de dimensions
+ * (métadonnées non chargées).
  */
 export function drawCover(
   ctx: CanvasRenderingContext2D,
   video: HTMLVideoElement,
   cw: number,
-  ch: number
+  ch: number,
+  zoom = 1
 ): boolean {
   const vw = video.videoWidth;
   const vh = video.videoHeight;
   if (!vw || !vh) return false;
 
-  const scale = Math.max(cw / vw, ch / vh);
+  const scale = Math.max(cw / vw, ch / vh) * zoom;
   const dw = vw * scale;
   const dh = vh * scale;
   const dx = (cw - dw) / 2;

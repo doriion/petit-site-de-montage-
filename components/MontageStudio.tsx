@@ -127,8 +127,10 @@ export default function MontageStudio() {
             <Controls
               sensitivity={m.sensitivity}
               cutEvery={m.cutEvery}
+              dynamicCut={m.dynamicCut}
               onSensitivity={m.setSensitivity}
               onCutEvery={m.setCutEvery}
+              onDynamicCut={m.setDynamicCut}
               bpm={m.bpm}
               beatCount={m.beatCount}
               cutCount={m.cutCount}

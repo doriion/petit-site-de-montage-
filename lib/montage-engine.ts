@@ -37,6 +37,10 @@ export interface Cut {
   time: number;
   /** Index du beat correspondant. */
   beatIndex: number;
+  /** Énergie normalisée (0-1) du morceau à la coupe — montage dynamique. */
+  energy?: number;
+  /** Zone d'énergie de la coupe — montage dynamique. */
+  zone?: EnergyZone;
 }
 
 export interface EDL {
@@ -208,6 +212,110 @@ export function estimateBPM(beats: number[]): number {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 6b. Courbe d'énergie du morceau (pour le montage dynamique)                 */
+/* -------------------------------------------------------------------------- */
+
+export interface EnergyCurve {
+  /** Niveau d'énergie normalisé 0-1, une valeur par hop (grille de l'Envelope). */
+  level: Float32Array;
+  hop: number;
+  sampleRate: number;
+}
+
+export type EnergyZone = "low" | "mid" | "high";
+
+export interface BeatEnergy {
+  zone: EnergyZone;
+  /** Énergie normalisée (0-1) au moment du beat. */
+  energy: number;
+}
+
+/** Seuils de zone sur le niveau normalisé (déjà relatif au morceau). */
+export interface ZoneThresholds {
+  low: number;
+  high: number;
+}
+
+const DEFAULT_ZONES: ZoneThresholds = { low: 1 / 3, high: 2 / 3 };
+
+/**
+ * Niveau d'énergie global du morceau : enveloppe lissée (~smoothSec) puis
+ * normalisée 0-1 par percentiles (p10/p90 — résiste aux pics isolés). Comme
+ * la normalisation est par morceau, les seuils de zone fixes en aval restent
+ * relatifs au morceau. Un morceau (quasi) plat renvoie 0.5 partout plutôt que
+ * d'amplifier son bruit en fausses variations.
+ */
+export function computeEnergyCurve(env: Envelope, smoothSec = 2): EnergyCurve {
+  const { energy, hop, sampleRate: sr } = env;
+  const n = energy.length;
+  const level = new Float32Array(n);
+  if (n === 0) return { level, hop, sampleRate: sr };
+
+  // Moyenne glissante centrée via sommes préfixées (O(n)).
+  const half = Math.max(1, Math.round(smoothSec / 2 / (hop / sr)));
+  const prefix = new Float64Array(n + 1);
+  for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + energy[i];
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - half);
+    const hi = Math.min(n, i + half + 1);
+    level[i] = (prefix[hi] - prefix[lo]) / (hi - lo);
+  }
+
+  const sorted = Array.from(level).sort((a, b) => a - b);
+  const p10 = sorted[Math.floor(0.1 * (n - 1))];
+  const p50 = sorted[Math.floor(0.5 * (n - 1))];
+  const p90 = sorted[Math.floor(0.9 * (n - 1))];
+  const range = p90 - p10;
+  if (range <= 0.1 * p50 + 1e-9) {
+    level.fill(0.5);
+    return { level, hop, sampleRate: sr };
+  }
+  for (let i = 0; i < n; i++) {
+    const v = (level[i] - p10) / range;
+    level[i] = v < 0 ? 0 : v > 1 ? 1 : v;
+  }
+  return { level, hop, sampleRate: sr };
+}
+
+/** Niveau d'énergie (0-1) à l'instant `timeSec`. */
+export function energyAt(curve: EnergyCurve, timeSec: number): number {
+  const n = curve.level.length;
+  if (n === 0) return 0;
+  const i = Math.round((timeSec * curve.sampleRate) / curve.hop);
+  return curve.level[i < 0 ? 0 : i >= n ? n - 1 : i];
+}
+
+/** Niveau d'énergie moyen (0-1) sur [t0, t1] — utile par segment. */
+export function energyBetween(
+  curve: EnergyCurve,
+  t0: number,
+  t1: number
+): number {
+  const n = curve.level.length;
+  if (n === 0) return 0;
+  const f = curve.sampleRate / curve.hop;
+  const i0 = Math.max(0, Math.min(n - 1, Math.floor(t0 * f)));
+  const i1 = Math.max(i0 + 1, Math.min(n, Math.ceil(t1 * f)));
+  let s = 0;
+  for (let i = i0; i < i1; i++) s += curve.level[i];
+  return s / (i1 - i0);
+}
+
+/** Classe chaque beat en zone low / mid / high selon le niveau du morceau. */
+export function classifyBeats(
+  beats: number[],
+  curve: EnergyCurve,
+  thresholds: ZoneThresholds = DEFAULT_ZONES
+): BeatEnergy[] {
+  return beats.map((t) => {
+    const e = energyAt(curve, t);
+    const zone: EnergyZone =
+      e < thresholds.low ? "low" : e > thresholds.high ? "high" : "mid";
+    return { zone, energy: e };
+  });
+}
+
+/* -------------------------------------------------------------------------- */
 /* 7. Edit Decision List : où couper                                           */
 /* -------------------------------------------------------------------------- */
 
@@ -223,6 +331,37 @@ export function buildEDL(analysis: BeatAnalysis, cutEvery = 2): EDL {
     if (beatIndex % step === 0) cuts.push({ time, beatIndex });
   });
   return { cuts, cutEvery: step };
+}
+
+/**
+ * EDL dynamique : l'énergie du morceau module la cadence de coupe autour de
+ * `baseCutEvery` (le réglage utilisateur). Zone low → base×2 (posé), mid →
+ * base, high → base/2 arrondi sup., plancher 1 (nerveux). Avec la base par
+ * défaut (2) : low = tous les 4 beats, mid = 2, high = 1. Chaque coupe porte
+ * l'énergie et la zone du beat qui l'a déclenchée.
+ */
+export function buildDynamicEDL(
+  analysis: BeatAnalysis,
+  curve: EnergyCurve,
+  baseCutEvery = 2
+): EDL {
+  const base = Math.max(1, Math.floor(baseCutEvery));
+  const stepFor = (z: EnergyZone): number =>
+    z === "low" ? base * 2 : z === "high" ? Math.max(1, Math.ceil(base / 2)) : base;
+
+  const byBeat = classifyBeats(analysis.beats, curve);
+  const cuts: Cut[] = [];
+  let since = Infinity; // ≥ n'importe quel pas → coupe dès le premier beat
+  analysis.beats.forEach((time, beatIndex) => {
+    const b = byBeat[beatIndex];
+    if (since >= stepFor(b.zone)) {
+      cuts.push({ time, beatIndex, energy: b.energy, zone: b.zone });
+      since = 1;
+    } else {
+      since++;
+    }
+  });
+  return { cuts, cutEvery: base };
 }
 
 /**
