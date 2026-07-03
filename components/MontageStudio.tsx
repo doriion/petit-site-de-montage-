@@ -40,6 +40,30 @@ export default function MontageStudio() {
           />
         )}
 
+        {/* Les deux slots de lecture (double-buffer) : sources du canvas.
+            Quasi invisibles mais « rendus » (pas display:none, que Safari
+            peut refuser de décoder). Jamais plus de 2 vidéos actives. */}
+        <video
+          ref={m.slotARef}
+          muted
+          playsInline
+          loop
+          preload="auto"
+          aria-hidden
+          tabIndex={-1}
+          className="pointer-events-none fixed bottom-0 right-0 h-px w-px opacity-0"
+        />
+        <video
+          ref={m.slotBRef}
+          muted
+          playsInline
+          loop
+          preload="auto"
+          aria-hidden
+          tabIndex={-1}
+          className="pointer-events-none fixed bottom-0 right-0 h-px w-px opacity-0"
+        />
+
         {m.audioMeta && (
           <p className="mt-3 truncate text-xs text-zinc-500">
             🎵 {m.audioMeta.name}
@@ -88,7 +112,7 @@ export default function MontageStudio() {
           />
           <ClipTray
             clips={m.clips}
-            registerVideo={m.registerVideo}
+            onMeta={m.onClipMeta}
             onRemove={m.removeClip}
             onClear={m.clearClips}
           />

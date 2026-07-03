@@ -8,6 +8,12 @@
  * lecture audio comme horloge maître, et compositing des clips sur un <canvas>
  * qui « coupe » sur les beats.
  *
+ * Lecture par segment (double-buffer, voir `lib/player.ts`) : au plus DEUX
+ * <video> actives. Le slot courant joue le clip du segment actif, seeké à son
+ * `inPoint` ; l'autre slot précharge + seek le clip du segment suivant pendant
+ * ce temps, pour une coupe instantanée. Les vignettes de la ClipTray ne jouent
+ * jamais (métadonnées seulement) — compatible mobile.
+ *
  * Principe de perf :
  *  - `analyzeEnvelope` (lourd) ne tourne qu'une fois par morceau.
  *  - `pickBeats` (léger) re-tourne à chaque changement de sensibilité.
@@ -27,12 +33,14 @@ import {
   type Envelope,
 } from "@/lib/montage-engine";
 import {
+  computeInPoints,
   drawCover,
   findSegmentIndex,
   formatTime,
   type Clip,
   type Segment,
 } from "@/lib/preview";
+import { VideoSlot } from "@/lib/player";
 
 export type Status = "idle" | "analyzing" | "ready" | "error";
 
@@ -58,6 +66,9 @@ export function useMontage() {
   const [audioMeta, setAudioMeta] = useState<AudioMeta | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
+  const [clipDurations, setClipDurations] = useState<Map<string, number>>(
+    () => new Map()
+  );
   const [analysis, setAnalysis] = useState<BeatAnalysis | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [sensitivity, setSensitivity] = useState(1.45);
@@ -73,23 +84,30 @@ export function useMontage() {
 
   const audioCtxRef = useRef<AudioContext | null>(null);
   const envelopeRef = useRef<Envelope | null>(null);
-  const videoMap = useRef<Map<string, HTMLVideoElement>>(new Map());
+
+  // Les deux slots de lecture (voir lib/player.ts). Init paresseuse.
+  const slotsRef = useRef<[VideoSlot, VideoSlot] | null>(null);
+  if (!slotsRef.current) slotsRef.current = [new VideoSlot(), new VideoSlot()];
+  const currentSlotIdxRef = useRef(0);
 
   // Miroirs des états lus dans la boucle RAF (évite de relancer la boucle).
   const segmentsRef = useRef<Segment[]>([]);
   const clipsRef = useRef<Clip[]>([]);
+  const audioUrlRef = useRef<string | null>(null);
   const durationRef = useRef(0);
   const segIndexRef = useRef(-1);
   const flashOpacityRef = useRef(0);
   const rafRef = useRef(0);
   const playingRef = useRef(false);
+  const renderFrameRef = useRef<() => void>(() => {});
 
-  useEffect(() => {
-    segmentsRef.current = segments;
-  }, [segments]);
-  useEffect(() => {
-    clipsRef.current = clips;
-  }, [clips]);
+  /* ------------------------- refs DOM des slots --------------------------- */
+  const slotARef = useCallback((el: HTMLVideoElement | null) => {
+    slotsRef.current?.[0].attach(el);
+  }, []);
+  const slotBRef = useCallback((el: HTMLVideoElement | null) => {
+    slotsRef.current?.[1].attach(el);
+  }, []);
 
   /* --------------------------- audio context ----------------------------- */
   const getAudioCtx = useCallback((): AudioContext => {
@@ -103,13 +121,37 @@ export function useMontage() {
     return audioCtxRef.current;
   }, []);
 
+  /* ------------------------------ boucle RAF ------------------------------ */
+  const stopLoop = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+  }, []);
+
+  const startLoop = useCallback(() => {
+    stopLoop();
+    const tick = () => {
+      renderFrameRef.current();
+      if (playingRef.current) rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }, [stopLoop]);
+
+  /* ------------------------------- arrêt ---------------------------------- */
+  const stop = useCallback(() => {
+    audioRef.current?.pause();
+    slotsRef.current?.forEach((s) => s.el?.pause());
+    playingRef.current = false;
+    stopLoop();
+    setIsPlaying(false);
+  }, [stopLoop]);
+
   /* ----------------------------- chargement ------------------------------ */
   const loadAudio = useCallback(
     async (file: File) => {
+      stop();
       setError(null);
       setStatus("analyzing");
-      setIsPlaying(false);
-      playingRef.current = false;
+      segIndexRef.current = -1;
       try {
         const buf = await file.arrayBuffer();
         const audioBuffer = await decodeAudio(buf, getAudioCtx());
@@ -135,15 +177,8 @@ export function useMontage() {
         setStatus("error");
       }
     },
-    [getAudioCtx, sensitivity]
+    [getAudioCtx, sensitivity, stop]
   );
-
-  // Re-pick des beats quand la sensibilité bouge (sans re-analyser l'enveloppe).
-  useEffect(() => {
-    if (!envelopeRef.current) return;
-    const a = pickBeats(envelopeRef.current, { sensitivity });
-    setAnalysis(a);
-  }, [sensitivity]);
 
   /* ------------------------------- clips --------------------------------- */
   const addClips = useCallback((files: FileList | File[]) => {
@@ -160,50 +195,106 @@ export function useMontage() {
   }, []);
 
   const removeClip = useCallback((id: string) => {
+    // Décharge le clip des slots AVANT de révoquer son URL.
+    slotsRef.current?.forEach((s) => s.detachClip(id));
+    setClipDurations((prev) => {
+      if (!prev.has(id)) return prev;
+      const m = new Map(prev);
+      m.delete(id);
+      return m;
+    });
     setClips((prev) => {
       const found = prev.find((c) => c.id === id);
       if (found) URL.revokeObjectURL(found.url);
-      videoMap.current.delete(id);
       return prev.filter((c) => c.id !== id);
     });
   }, []);
 
   const clearClips = useCallback(() => {
+    slotsRef.current?.forEach((s) => s.reset());
+    setClipDurations(new Map());
     setClips((prev) => {
       prev.forEach((c) => URL.revokeObjectURL(c.url));
       return [];
     });
-    videoMap.current.clear();
   }, []);
 
-  const registerVideo = useCallback(
-    (id: string, el: HTMLVideoElement | null) => {
-      if (el) videoMap.current.set(id, el);
-      else videoMap.current.delete(id);
+  /** Remonté par les vignettes de la ClipTray (loadedmetadata). */
+  const onClipMeta = useCallback((id: string, duration: number) => {
+    setClipDurations((prev) => {
+      if (prev.get(id) === duration) return prev;
+      const m = new Map(prev);
+      m.set(id, duration);
+      return m;
+    });
+  }, []);
+
+  /* ------------------- préparation / activation des slots ----------------- */
+  const prepareNextAfter = useCallback((idx: number) => {
+    const segs = segmentsRef.current;
+    const nIdx = idx + 1;
+    if (nIdx >= segs.length) return;
+    const nSeg = segs[nIdx];
+    const nClip = clipsRef.current[nSeg.sourceIndex];
+    if (!nClip || !slotsRef.current) return;
+    void slotsRef.current[1 - currentSlotIdxRef.current].prepare(
+      nIdx,
+      nSeg,
+      nClip,
+      0
+    );
+  }, []);
+
+  /**
+   * Fait pointer la lecture sur `segments[idx]`. Chemin chaud (boundary en
+   * lecture) : l'autre slot est déjà prêt → échange instantané. Chemin froid
+   * (seek, mapping changé, `force`) : re-prépare le slot courant à la bonne
+   * position puis relance, et précharge le suivant.
+   */
+  const activateSegment = useCallback(
+    (idx: number, force = false) => {
+      const segs = segmentsRef.current;
+      const audio = audioRef.current;
+      const slots = slotsRef.current;
+      if (!audio || !slots || idx < 0 || idx >= segs.length) return;
+      const seg = segs[idx];
+      const clip = clipsRef.current[seg.sourceIndex];
+      if (!clip) return;
+
+      const curIdx = currentSlotIdxRef.current;
+      const cur = slots[curIdx];
+      const other = slots[1 - curIdx];
+
+      // Chemin chaud : le suivant est prêt, on échange les rôles.
+      if (!force && other.preparedSeg === idx) {
+        currentSlotIdxRef.current = 1 - curIdx;
+        if (playingRef.current) other.el?.play().catch(() => {});
+        cur.el?.pause();
+        prepareNextAfter(idx);
+        return;
+      }
+
+      // Reprise après pause au même segment : rien à re-seeker.
+      if (!force && cur.preparedSeg === idx) {
+        prepareNextAfter(idx);
+        return;
+      }
+
+      // Chemin froid : synchronise le slot courant sur le temps audio exact.
+      const offset = Math.max(0, audio.currentTime - seg.start);
+      void cur.prepare(idx, seg, clip, offset).then((ok) => {
+        if (!ok) return;
+        if (playingRef.current && segIndexRef.current === idx) {
+          cur.el?.play().catch(() => {});
+        } else if (!playingRef.current) {
+          renderFrameRef.current(); // rafraîchit la frame à l'arrêt
+        }
+      });
+      other.el?.pause();
+      prepareNextAfter(idx);
     },
-    []
+    [prepareNextAfter]
   );
-
-  /* ----------------------- (re)calcul des segments ----------------------- */
-  useEffect(() => {
-    if (!analysis) {
-      setSegments([]);
-      return;
-    }
-    const edl = buildEDL(analysis, cutEvery);
-    const count = Math.max(1, clips.length);
-    let segs = assignClipsToCuts(edl, count, analysis.duration);
-
-    // Aucun beat : on montre quand même le 1er clip sur tout le morceau.
-    if (segs.length === 0 && analysis.duration > 0) {
-      segs = [{ start: 0, end: analysis.duration, sourceIndex: 0 }];
-    }
-    // Couvre l'intro (avant le 1er beat) avec le premier segment.
-    if (segs.length > 0 && segs[0].start > 0) {
-      segs = [{ ...segs[0], start: 0 }, ...segs.slice(1)];
-    }
-    setSegments(segs);
-  }, [analysis, cutEvery, clips.length]);
 
   /* ----------------------------- rendu RAF ------------------------------- */
   const renderFrame = useCallback(() => {
@@ -225,21 +316,22 @@ export function useMontage() {
     }
 
     const segs = segmentsRef.current;
-    const idx = findSegmentIndex(segs, t, segIndexRef.current);
-    if (idx !== segIndexRef.current && idx >= 0) {
-      flashOpacityRef.current = 0.85; // coupe → flash
+    const idx = findSegmentIndex(segs, t, Math.max(0, segIndexRef.current));
+    if (idx !== segIndexRef.current) {
+      if (idx >= 0 && segIndexRef.current >= 0) flashOpacityRef.current = 0.85;
+      segIndexRef.current = idx;
+      activateSegment(idx, false);
     }
-    segIndexRef.current = idx;
 
-    let drew = false;
-    if (idx >= 0) {
-      const clip = clipsRef.current[segs[idx].sourceIndex];
-      const v = clip ? videoMap.current.get(clip.id) : undefined;
-      if (v && v.readyState >= 2) {
-        drew = drawCover(ctx, v, canvas.width, canvas.height);
+    if (idx >= 0 && clipsRef.current.length > 0 && slotsRef.current) {
+      const slot = slotsRef.current[currentSlotIdxRef.current];
+      const v = slot.el;
+      if (v && slot.preparedSeg === idx && v.readyState >= 2) {
+        drawCover(ctx, v, canvas.width, canvas.height);
       }
-    }
-    if (!drew) {
+      // Sinon : préparation en cours → on fige la dernière frame dessinée
+      // plutôt que de flasher du noir.
+    } else {
       ctx.fillStyle = "#0a0a0f";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
@@ -250,60 +342,56 @@ export function useMontage() {
       if (flashOpacityRef.current < 0.01) flashOpacityRef.current = 0;
       flashRef.current.style.opacity = String(flashOpacityRef.current);
     }
-  }, []);
+  }, [activateSegment]);
 
-  const stopLoop = useCallback(() => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = 0;
-  }, []);
-
-  const startLoop = useCallback(() => {
-    stopLoop();
-    const tick = () => {
-      renderFrame();
-      if (playingRef.current) rafRef.current = requestAnimationFrame(tick);
-    };
-    rafRef.current = requestAnimationFrame(tick);
-  }, [renderFrame, stopLoop]);
+  useEffect(() => {
+    renderFrameRef.current = renderFrame;
+  }, [renderFrame]);
 
   /* ------------------------------ lecture -------------------------------- */
-  const pauseVideos = useCallback(() => {
-    clipsRef.current.forEach((c) => {
-      const v = videoMap.current.get(c.id);
-      if (v) v.pause();
-    });
-  }, []);
-
-  const stop = useCallback(() => {
-    const audio = audioRef.current;
-    if (audio) audio.pause();
-    pauseVideos();
-    playingRef.current = false;
-    stopLoop();
-    setIsPlaying(false);
-  }, [pauseVideos, stopLoop]);
-
   const play = useCallback(async () => {
     const audio = audioRef.current;
-    if (!audio) return;
-    // Lance toutes les vidéos en muet pour qu'elles défilent → coupe instantanée.
-    clipsRef.current.forEach((c) => {
-      const v = videoMap.current.get(c.id);
-      if (v) {
-        v.muted = true;
-        v.play().catch(() => {});
+    const slots = slotsRef.current;
+    if (!audio || !slots || clipsRef.current.length === 0) return;
+
+    // Fin de morceau : on repart du début.
+    const dur = durationRef.current || audio.duration || 0;
+    if (audio.ended || (dur > 0 && audio.currentTime >= dur - 0.05)) {
+      audio.currentTime = 0;
+    }
+
+    const segs = segmentsRef.current;
+    let idx = findSegmentIndex(segs, audio.currentTime, Math.max(0, segIndexRef.current));
+    if (idx < 0 && segs.length > 0) idx = 0;
+    segIndexRef.current = idx;
+
+    // Prépare le slot courant AVANT de lancer l'audio : première frame synchro.
+    if (idx >= 0) {
+      const seg = segs[idx];
+      const clip = clipsRef.current[seg.sourceIndex];
+      const cur = slots[currentSlotIdxRef.current];
+      if (clip && cur.preparedSeg !== idx) {
+        await cur.prepare(idx, seg, clip, Math.max(0, audio.currentTime - seg.start));
       }
-    });
+    }
+
     try {
       await audio.play();
     } catch {
       setError("Le navigateur a bloqué la lecture. Reclique sur Lecture.");
       return;
     }
+    setError(null);
     playingRef.current = true;
     setIsPlaying(true);
+
+    const cur = slots[currentSlotIdxRef.current];
+    if (cur.preparedSeg === segIndexRef.current) {
+      cur.el?.play().catch(() => {});
+    }
+    prepareNextAfter(segIndexRef.current);
     startLoop();
-  }, [startLoop]);
+  }, [prepareNextAfter, startLoop]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -319,37 +407,90 @@ export function useMontage() {
       const dur = durationRef.current || audio.duration || 0;
       if (dur <= 0) return;
       audio.currentTime = Math.max(0, Math.min(1, ratio)) * dur;
-      segIndexRef.current = findSegmentIndex(segmentsRef.current, audio.currentTime, 0);
-      if (!playingRef.current) renderFrame(); // refresh à l'arrêt
+      const idx = findSegmentIndex(segmentsRef.current, audio.currentTime, 0);
+      segIndexRef.current = idx;
+      if (idx >= 0) activateSegment(idx, true);
+      if (!playingRef.current) renderFrame(); // playhead/label tout de suite
     },
-    [renderFrame]
+    [activateSegment, renderFrame]
   );
 
   const onEnded = useCallback(() => {
     stop();
-  }, [stop]);
+    const audio = audioRef.current;
+    if (audio) audio.currentTime = 0;
+    segIndexRef.current = segmentsRef.current.length > 0 ? 0 : -1;
+    if (segIndexRef.current === 0) activateSegment(0, true);
+    renderFrame();
+  }, [stop, activateSegment, renderFrame]);
 
-  // Rafraîchit une frame à l'arrêt quand le montage change (slider, clips…).
+  /* ------------------------------- effets --------------------------------- */
+
+  // Miroirs (déclarés avant les effets qui les consomment).
   useEffect(() => {
-    if (!playingRef.current) renderFrame();
-  }, [segments, clips, renderFrame]);
+    clipsRef.current = clips;
+  }, [clips]);
+  useEffect(() => {
+    audioUrlRef.current = audioUrl;
+  }, [audioUrl]);
+
+  // Re-pick des beats quand la sensibilité bouge (sans re-analyser l'enveloppe).
+  useEffect(() => {
+    if (!envelopeRef.current) return;
+    const a = pickBeats(envelopeRef.current, { sensitivity });
+    setAnalysis(a);
+  }, [sensitivity]);
+
+  // (Re)calcul des segments : EDL → clips → inPoints.
+  useEffect(() => {
+    if (!analysis) {
+      setSegments([]);
+      return;
+    }
+    const edl = buildEDL(analysis, cutEvery);
+    const count = Math.max(1, clips.length);
+    let segs: Segment[] = assignClipsToCuts(edl, count, analysis.duration);
+
+    // Aucun beat : on montre quand même le 1er clip sur tout le morceau.
+    if (segs.length === 0 && analysis.duration > 0) {
+      segs = [{ start: 0, end: analysis.duration, sourceIndex: 0 }];
+    }
+    // Couvre l'intro (avant le 1er beat) avec le premier segment.
+    if (segs.length > 0 && segs[0].start > 0) {
+      segs = [{ ...segs[0], start: 0 }, ...segs.slice(1)];
+    }
+
+    const durs = clips.map((c) => clipDurations.get(c.id));
+    setSegments(computeInPoints(segs, durs, analysis.duration));
+  }, [analysis, cutEvery, clips, clipDurations]);
+
+  // Nouveau mapping segments/clips : tout ce qui est préparé est caduc.
+  // On re-prépare à la position courante (et on redessine si à l'arrêt).
+  useEffect(() => {
+    segmentsRef.current = segments;
+    slotsRef.current?.forEach((s) => s.invalidate());
+    const audio = audioRef.current;
+    const idx =
+      segments.length > 0
+        ? findSegmentIndex(segments, audio?.currentTime ?? 0, 0)
+        : -1;
+    segIndexRef.current = idx;
+    if (idx >= 0) activateSegment(idx, true);
+    else if (!playingRef.current) renderFrameRef.current();
+  }, [segments, activateSegment]);
 
   /* ----------------------------- nettoyage ------------------------------- */
   useEffect(() => {
     return () => {
       stopLoop();
+      slotsRef.current?.forEach((s) => s.reset());
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
       }
+      clipsRef.current.forEach((c) => URL.revokeObjectURL(c.url));
+      if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Révoque les object URLs des clips encore présents au démontage.
-  useEffect(() => {
-    return () => {
-      clipsRef.current.forEach((c) => URL.revokeObjectURL(c.url));
-    };
   }, []);
 
   /* ----------------------------- dérivés --------------------------------- */
@@ -364,7 +505,9 @@ export function useMontage() {
     playheadRef,
     timeLabelRef,
     flashRef,
-    registerVideo,
+    slotARef,
+    slotBRef,
+    onClipMeta,
     renderSize: { width: RENDER_W, height: RENDER_H },
 
     // état

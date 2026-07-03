@@ -4,19 +4,21 @@ import type { Clip } from "@/lib/preview";
 
 interface ClipTrayProps {
   clips: Clip[];
-  registerVideo: (id: string, el: HTMLVideoElement | null) => void;
+  onMeta: (id: string, duration: number) => void;
   onRemove: (id: string) => void;
   onClear: () => void;
 }
 
 /**
- * La rangée de clips importés. Les <video> sont rendues ici mais hors-cadre
- * (elles servent de *source* au canvas, pas d'affichage direct). On garde une
- * petite vignette cliquable + bouton de suppression pour chaque clip.
+ * La rangée de clips importés. Pures vignettes : ces <video> ne JOUENT jamais
+ * (preload="metadata" + un micro-seek pour afficher une frame). La lecture
+ * passe par les deux slots de `lib/player.ts` — c'est ce qui rend la preview
+ * viable sur mobile. Chaque vignette remonte la durée de son clip via
+ * `onMeta`, dont dérivent les points d'entrée (inPoint) des segments.
  */
 export default function ClipTray({
   clips,
-  registerVideo,
+  onMeta,
   onRemove,
   onClear,
 }: ClipTrayProps) {
@@ -44,12 +46,22 @@ export default function ClipTray({
             className="group relative overflow-hidden rounded-xl border border-ink-600 bg-ink-800"
           >
             <video
-              ref={(el) => registerVideo(clip.id, el)}
               src={clip.url}
               muted
-              loop
               playsInline
-              preload="auto"
+              preload="metadata"
+              onLoadedMetadata={(e) => {
+                const v = e.currentTarget;
+                onMeta(clip.id, v.duration);
+                // Force une frame visible (sinon vignette noire sur iOS).
+                try {
+                  if (Number.isFinite(v.duration) && v.duration > 0) {
+                    v.currentTime = Math.min(0.1, v.duration / 2);
+                  }
+                } catch {
+                  /* peu importe : vignette noire au pire */
+                }
+              }}
               className="aspect-video w-full bg-black object-cover"
             />
             <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-accent">

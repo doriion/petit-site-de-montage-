@@ -12,7 +12,8 @@ rythme** sur un `<canvas>`. Rien n'est envoyé sur un serveur.
 - **Next.js 15** (App Router) + **TypeScript**
 - **Tailwind CSS v3**
 - **Web Audio API** pour le décodage / l'analyse (aucune dépendance audio tierce)
-- `<canvas>` + plusieurs `<video>` muettes comme sources
+- `<canvas>` + **2 slots `<video>` en double-buffer** (jamais plus de 2 vidéos
+  actives → compatible mobile)
 
 ## Démarrer
 
@@ -34,12 +35,19 @@ npm run lint                 # ESLint (next/core-web-vitals)
      changement de sensibilité).
    - `buildEDL()` / `assignClipsToCuts()` : transforme les beats en points de
      coupe puis en segments `{ start, end, sourceIndex }`.
-2. **`hooks/useMontage.ts`** — branche le moteur au DOM : décodage, analyse,
+2. **`lib/preview.ts`** — pont EDL → preview : `computeInPoints()` donne à
+   chaque segment son point d'entrée dans le clip (proportionnel à la position
+   dans le morceau), `findSegmentIndex()` suit le segment actif.
+3. **`lib/player.ts`** — lecture par segment en **double-buffer** : le slot
+   courant joue (seeké à son `inPoint`), l'autre slot précharge + seek le clip
+   du segment suivant pendant ce temps → coupe instantanée, et jamais plus de
+   2 vidéos actives (les vignettes ne jouent jamais).
+4. **`hooks/useMontage.ts`** — branche le tout au DOM : décodage, analyse,
    et une boucle `requestAnimationFrame` qui lit `audio.currentTime` comme
-   horloge maître et dessine le clip actif sur le canvas (playhead/canvas
+   horloge maître et dessine le slot courant sur le canvas (playhead/canvas
    écrits en DOM direct, pas de `setState` à 60 fps).
-3. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
-   timeline), `Controls` (sliders), `ClipTray` (clips), `Dropzone`.
+5. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
+   timeline), `Controls` (sliders), `ClipTray` (vignettes), `Dropzone`.
 
 ## Réglages
 

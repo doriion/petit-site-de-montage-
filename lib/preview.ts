@@ -12,6 +12,11 @@ export interface Segment {
   start: number;
   end: number;
   sourceIndex: number;
+  /**
+   * Point d'entrée dans le clip source (s) : où seek la vidéo au début du
+   * segment. Absent/0 tant que la durée du clip n'est pas connue.
+   */
+  inPoint?: number;
 }
 
 /** Un clip vidéo importé par l'utilisateur. */
@@ -19,6 +24,37 @@ export interface Clip {
   id: string;
   name: string;
   url: string;
+}
+
+/**
+ * Calcule le point d'entrée de chaque segment dans son clip source.
+ * Politique actuelle : proportionnel — la position du segment dans le montage
+ * est reportée dans la durée du clip (un segment à 50 % du morceau démarre à
+ * 50 % du clip). Clampé pour que le segment tienne avant la fin du clip quand
+ * c'est possible ; sinon 0 (le slot vidéo boucle si le clip est trop court).
+ * Durée de clip inconnue (métadonnées pas chargées, WebM sans durée) → 0.
+ */
+export function computeInPoints(
+  segments: Segment[],
+  clipDurations: Array<number | undefined>,
+  montageDuration: number
+): Segment[] {
+  return segments.map((s) => {
+    const dur = clipDurations[s.sourceIndex];
+    if (
+      !dur ||
+      !Number.isFinite(dur) ||
+      dur <= 0 ||
+      !Number.isFinite(montageDuration) ||
+      montageDuration <= 0
+    ) {
+      return { ...s, inPoint: 0 };
+    }
+    const segLen = Math.max(0, s.end - s.start);
+    const raw = (s.start / montageDuration) * dur;
+    const maxIn = Math.max(0, dur - segLen);
+    return { ...s, inPoint: Math.min(raw, maxIn) };
+  });
 }
 
 /**
