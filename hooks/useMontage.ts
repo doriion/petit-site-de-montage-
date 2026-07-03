@@ -182,7 +182,11 @@ export function useMontage() {
 
   /* ------------------------------- clips --------------------------------- */
   const addClips = useCallback((files: FileList | File[]) => {
-    const list = Array.from(files).filter((f) => f.type.startsWith("video/"));
+    // Certains OS mobiles livrent un MIME vide : on se rabat sur l'extension.
+    const isVideo = (f: File) =>
+      f.type.startsWith("video/") ||
+      (f.type === "" && /\.(mp4|mov|webm|m4v)$/i.test(f.name));
+    const list = Array.from(files).filter(isVideo);
     if (list.length === 0) return;
     setClips((prev) => [
       ...prev,

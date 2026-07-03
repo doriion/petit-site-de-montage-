@@ -79,7 +79,7 @@ export default function MontageStudio() {
             1 · La musique
           </h2>
           <Dropzone
-            accept="audio/*"
+            accept="audio/*,.mp3,.wav,.m4a,.aac"
             onFiles={(files) => {
               const f = Array.from(files)[0];
               if (f) void m.loadAudio(f);
@@ -103,7 +103,7 @@ export default function MontageStudio() {
             2 · Les clips
           </h2>
           <Dropzone
-            accept="video/*"
+            accept="video/*,.mp4,.mov,.webm"
             multiple
             onFiles={m.addClips}
             title="Ajouter des clips"
