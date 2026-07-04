@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMontage } from "@/hooks/useMontage";
+import { useDemo } from "@/hooks/useDemo";
 import Dropzone from "@/components/Dropzone";
 import ClipTray from "@/components/ClipTray";
 import Controls from "@/components/Controls";
@@ -13,6 +14,16 @@ import ExportPanel from "@/components/ExportPanel";
 export default function MontageStudio() {
   const m = useMontage();
   const ready = m.status === "ready" && !!m.audioUrl;
+
+  const demo = useDemo({
+    status: m.status,
+    audioUrl: m.audioUrl,
+    isPlaying: m.isPlaying,
+    clipsCount: m.clips.length,
+    addClips: m.addClips,
+    loadAudio: m.loadAudio,
+    togglePlay: m.togglePlay,
+  });
 
   // Segment inspecté (tap sur la timeline). Fermé si la structure change.
   const [selectedSeg, setSelectedSeg] = useState<number | null>(null);
@@ -126,6 +137,39 @@ export default function MontageStudio() {
 
       {/* --------------------------- Panneau ----------------------------- */}
       <aside className="order-1 min-w-0 space-y-6 lg:order-2">
+        {/* Démo instantanée : visible uniquement sur l'écran vide, et
+            seulement si les fichiers de démo existent réellement. */}
+        {demo.demoAvailable && m.status === "idle" && (
+          <div className="space-y-2">
+            <button
+              type="button"
+              data-demo
+              onClick={() => void demo.startDemo()}
+              disabled={demo.demoLoading}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border border-accent/40 bg-accent/10 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/20 disabled:cursor-wait"
+            >
+              {demo.demoLoading ? (
+                <>
+                  <span className="h-2 w-2 animate-pulse rounded-full bg-accent" />
+                  Chargement de l&apos;exemple…
+                </>
+              ) : (
+                "✨ Essayer avec l'exemple"
+              )}
+            </button>
+            {demo.demoLoading && (
+              <p className="text-[11px] text-zinc-500">
+                Quelques Mo à télécharger — la lecture se lance toute seule.
+              </p>
+            )}
+          </div>
+        )}
+        {demo.demoLoaded && (
+          <p data-demo-note className="text-[11px] text-zinc-500">
+            ✨ clips et musique de démo — mets les tiens quand tu veux
+          </p>
+        )}
+
         {/* Import + réglages : gelés pendant l'export */}
         <div
           className={`space-y-6 ${

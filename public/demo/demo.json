@@ -1,0 +1,4 @@
+{
+  "audio": "/demo/musique.mp3",
+  "clips": ["/demo/clip-1.mp4", "/demo/clip-2.mp4", "/demo/clip-3.mp4"]
+}

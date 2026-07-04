@@ -81,6 +81,14 @@ npm run lint                 # ESLint (next/core-web-vitals)
    re-calculs tant que les coupes ne bougent pas), `Controls`, `ClipTray`,
    `Dropzone`.
 
+## Mode démo
+
+`public/demo/demo.json` liste une musique + des clips d'exemple. Si les
+fichiers sont présents (voir `public/demo/README.md`), l'écran d'accueil vide
+propose « ✨ Essayer avec l'exemple » : les fichiers sont téléchargés puis
+injectés dans le pipeline d'upload standard (aucune branche spéciale), et la
+lecture démarre toute seule. Fichiers absents → le bouton reste caché.
+
 ## Réglages
 
 | Réglage                | Effet                                                                                       |
