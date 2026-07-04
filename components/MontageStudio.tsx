@@ -22,9 +22,9 @@ export default function MontageStudio() {
   }, [m.segments.length, selectedSeg]);
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
       {/* ----------------------------- Scène ----------------------------- */}
-      <section className="order-2 lg:order-1">
+      <section className="order-2 min-w-0 lg:order-1">
         <Stage
           canvasRef={m.canvasRef}
           flashRef={m.flashRef}
@@ -122,7 +122,7 @@ export default function MontageStudio() {
       </section>
 
       {/* --------------------------- Panneau ----------------------------- */}
-      <aside className="order-1 space-y-6 lg:order-2">
+      <aside className="order-1 min-w-0 space-y-6 lg:order-2">
         {/* Audio */}
         <div className="space-y-3">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
