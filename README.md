@@ -98,6 +98,16 @@ Le letterbox est dessiné sur le canvas à chaque frame → il est aussi dans
 l'export. Les explications pédagogiques citent le style quand il change le
 comportement (« pas de flash ici — le style Chill adoucit tout »).
 
+## Bibliothèque de sons
+
+`public/sounds/library.json` liste des morceaux prêts à l'emploi (galerie dans
+« 1 · La musique ») : `id`, `title`, `artist`, `mood`, `file`, `credit`, `bpm`
+optionnel. Un tap télécharge la piste et l'injecte par le pipeline d'upload
+standard — même code path que la démo. Le `credit` s'affiche près du lecteur
+et s'incruste dans le filigrane des exports (les artistes sont crédités sur
+les montages partagés). Ajouter une piste = un fichier + une entrée JSON
+(voir `public/sounds/README.md`) ; manifeste absent ou vide → galerie masquée.
+
 ## Mode démo
 
 `public/demo/demo.json` liste une musique + des clips d'exemple. Si les

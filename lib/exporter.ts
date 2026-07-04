@@ -63,24 +63,31 @@ export function pickExportMimeType(
 
 /**
  * Filigrane discret en bas à droite : texte semi-transparent, taille relative
- * à la hauteur du canvas. À n'appeler qu'après avoir peint la frame (sinon
+ * à la hauteur du canvas. `credit` (piste de la bibliothèque de sons) se
+ * dessine en plus petit juste au-dessus — les artistes sont crédités sur les
+ * montages partagés. À n'appeler qu'après avoir peint la frame (sinon
  * l'alpha s'accumule d'une frame à l'autre).
  */
 export function drawWatermark(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  text: string
+  text: string,
+  credit?: string
 ): void {
   const margin = Math.round(height * 0.03);
   ctx.save();
   ctx.globalAlpha = 0.35;
   ctx.fillStyle = "#ffffff";
-  ctx.font = `600 ${Math.round(height * 0.035)}px ui-sans-serif, system-ui, sans-serif`;
   ctx.textAlign = "right";
   ctx.textBaseline = "bottom";
   ctx.shadowColor = "rgba(0, 0, 0, 0.55)";
   ctx.shadowBlur = 4;
+  ctx.font = `600 ${Math.round(height * 0.035)}px ui-sans-serif, system-ui, sans-serif`;
   ctx.fillText(text, width - margin, height - margin);
+  if (credit) {
+    ctx.font = `500 ${Math.round(height * 0.025)}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.fillText(credit, width - margin, height - margin - Math.round(height * 0.04));
+  }
   ctx.restore();
 }

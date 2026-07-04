@@ -8,6 +8,7 @@ import Dropzone from "@/components/Dropzone";
 import ClipTray from "@/components/ClipTray";
 import Controls from "@/components/Controls";
 import PackSelector from "@/components/PackSelector";
+import SoundLibrary from "@/components/SoundLibrary";
 import Stage from "@/components/Stage";
 import Timeline from "@/components/Timeline";
 import SegmentInspector from "@/components/SegmentInspector";
@@ -98,6 +99,12 @@ export default function MontageStudio() {
         {m.audioMeta && (
           <p className="mt-3 truncate text-xs text-zinc-500">
             🎵 {m.audioMeta.name}
+            {m.audioCredit && (
+              <span data-credit className="text-zinc-600">
+                {" "}
+                · {m.audioCredit}
+              </span>
+            )}
           </p>
         )}
 
@@ -207,6 +214,11 @@ export default function MontageStudio() {
             </p>
           )}
           {m.error && <p className="text-xs text-beat">{m.error}</p>}
+          <SoundLibrary
+            loadAudio={m.loadAudio}
+            activeCredit={m.audioCredit}
+            disabled={m.status === "analyzing"}
+          />
         </div>
 
         {/* Clips */}

@@ -1,0 +1,13 @@
+{
+  "tracks": [
+    {
+      "id": "demo-126",
+      "title": "Demo Track",
+      "artist": "Démo",
+      "bpm": 126,
+      "mood": "dur",
+      "file": "/demo/demo-track-126bpm.m4a",
+      "credit": "Musique : Démo"
+    }
+  ]
+}

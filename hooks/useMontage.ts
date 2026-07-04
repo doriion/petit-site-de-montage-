@@ -87,6 +87,10 @@ export function useMontage() {
   const [error, setError] = useState<string | null>(null);
   const [audioMeta, setAudioMeta] = useState<AudioMeta | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  // Crédit du morceau actif (piste de la bibliothèque de sons). Posé au
+  // succès de loadAudio, effacé par tout import sans crédit — et incrusté
+  // dans le filigrane d'export.
+  const [audioCredit, setAudioCredit] = useState<string | null>(null);
   const [clips, setClips] = useState<Clip[]>([]);
   const [clipDurations, setClipDurations] = useState<Map<string, number>>(
     () => new Map()
@@ -138,6 +142,7 @@ export function useMontage() {
   const segmentsRef = useRef<Segment[]>([]);
   const clipsRef = useRef<Clip[]>([]);
   const audioUrlRef = useRef<string | null>(null);
+  const audioCreditRef = useRef<string | null>(null);
   const durationRef = useRef(0);
   const segIndexRef = useRef(-1);
   const flashOpacityRef = useRef(0);
@@ -223,7 +228,7 @@ export function useMontage() {
 
   /* ----------------------------- chargement ------------------------------ */
   const loadAudio = useCallback(
-    async (file: File) => {
+    async (file: File, opts?: { credit?: string | null }) => {
       stop();
       setError(null);
       setStatus("analyzing");
@@ -245,6 +250,9 @@ export function useMontage() {
           return URL.createObjectURL(file);
         });
         setAudioMeta({ name: file.name, duration: audioBuffer.duration });
+        // Métadonnée de provenance, posée seulement au succès : une piste de
+        // la bibliothèque porte son crédit, tout autre import l'efface.
+        setAudioCredit(opts?.credit ?? null);
         setStatus("ready");
       } catch (e) {
         console.error(e);
@@ -584,13 +592,15 @@ export function useMontage() {
     }
 
     // Filigrane UNIQUEMENT pendant l'export (voir lib/exporter.ts — l'offre
-    // payante passera watermark à false).
+    // payante passera watermark à false). Le crédit de la piste bibliothèque
+    // s'incruste au-dessus : les artistes sont crédités sur les partages.
     if (painted && exportingRef.current && exportCfgRef.current.watermark) {
       drawWatermark(
         ctx,
         canvas.width,
         canvas.height,
-        exportCfgRef.current.watermarkText
+        exportCfgRef.current.watermarkText,
+        audioCreditRef.current ?? undefined
       );
     }
 
@@ -909,6 +919,9 @@ export function useMontage() {
   useEffect(() => {
     effectsRef.current = effectsCfg;
   }, [effectsCfg]);
+  useEffect(() => {
+    audioCreditRef.current = audioCredit;
+  }, [audioCredit]);
 
   // Re-pick des beats quand la sensibilité bouge (sans re-analyser l'enveloppe).
   useEffect(() => {
@@ -1048,6 +1061,7 @@ export function useMontage() {
     error,
     audioMeta,
     audioUrl,
+    audioCredit,
     clips,
     clipDurations,
     clipMotion,
