@@ -1,11 +1,13 @@
 # Fichiers de démo
 
-Dépose ici les fichiers listés dans `demo.json` :
+Servis par le bouton « ✨ Essayer avec l'exemple » (manifeste : `demo.json`) :
 
-- `musique.mp3` — le morceau d'exemple (MP3/WAV/M4A)
-- `clip-1.mp4`, `clip-2.mp4`, `clip-3.mp4` — les clips d'exemple
+- `demo-track-126bpm.m4a` — le morceau d'exemple (126 BPM)
+- `demo-calme-drift.mp4` — clip calme
+- `demo-moyen-grid.mp4` — clip moyen
+- `demo-nerveux-particules.mp4` — clip nerveux
+- `demo-nerveux-strobe.mp4` — clip nerveux
 
-Tant que `musique.mp3` est absent, le bouton « ✨ Essayer avec l'exemple »
-reste caché (vérification silencieuse au chargement). Tu peux changer les
-chemins/noms dans `demo.json` — garde des fichiers légers (quelques Mo),
-ils sont téléchargés par le navigateur au clic.
+Pour changer la démo : remplace les fichiers et ajuste les chemins dans
+`demo.json`, puis rebuild/redeploy (la liste des fichiers `public/` est figée
+au build). Si le fichier audio est absent, le bouton reste caché.

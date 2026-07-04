@@ -1,4 +1,9 @@
 {
-  "audio": "/demo/musique.mp3",
-  "clips": ["/demo/clip-1.mp4", "/demo/clip-2.mp4", "/demo/clip-3.mp4"]
+  "audio": "/demo/demo-track-126bpm.m4a",
+  "clips": [
+    "/demo/demo-calme-drift.mp4",
+    "/demo/demo-moyen-grid.mp4",
+    "/demo/demo-nerveux-particules.mp4",
+    "/demo/demo-nerveux-strobe.mp4"
+  ]
 }
