@@ -1,14 +1,25 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useMontage } from "@/hooks/useMontage";
 import Dropzone from "@/components/Dropzone";
 import ClipTray from "@/components/ClipTray";
 import Controls from "@/components/Controls";
 import Stage from "@/components/Stage";
+import Timeline from "@/components/Timeline";
+import SegmentInspector from "@/components/SegmentInspector";
 
 export default function MontageStudio() {
   const m = useMontage();
   const ready = m.status === "ready" && !!m.audioUrl;
+
+  // Segment inspecté (tap sur la timeline). Fermé si la structure change.
+  const [selectedSeg, setSelectedSeg] = useState<number | null>(null);
+  useEffect(() => {
+    if (selectedSeg !== null && selectedSeg >= m.segments.length) {
+      setSelectedSeg(null);
+    }
+  }, [m.segments.length, selectedSeg]);
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -68,6 +79,45 @@ export default function MontageStudio() {
           <p className="mt-3 truncate text-xs text-zinc-500">
             🎵 {m.audioMeta.name}
           </p>
+        )}
+
+        {/* Timeline interactive (blocs par segment) + panneau d'inspection */}
+        {ready && m.segments.length > 0 && (
+          <div className="mt-4">
+            <Timeline
+              segments={m.segments}
+              selected={selectedSeg}
+              overriddenIndices={new Set(m.overrides.keys())}
+              audioRef={m.audioRef}
+              isPlaying={m.isPlaying}
+              onSelect={(i) => {
+                m.seekToSegment(i);
+                setSelectedSeg(i);
+              }}
+            />
+            {selectedSeg !== null && m.segments[selectedSeg] && (
+              <SegmentInspector
+                index={selectedSeg}
+                segment={m.segments[selectedSeg]}
+                prevZone={
+                  selectedSeg > 0 ? m.segments[selectedSeg - 1].zone : undefined
+                }
+                clips={m.clips}
+                clipDurations={m.clipDurations}
+                baseCutEvery={m.cutEvery}
+                dynamic={m.dynamicCut}
+                overridden={m.overrides.has(selectedSeg)}
+                onChangeClip={(si) =>
+                  m.setSegmentOverride(selectedSeg, { sourceIndex: si })
+                }
+                onChangeInPoint={(v) =>
+                  m.setSegmentOverride(selectedSeg, { inPoint: v })
+                }
+                onResetOverride={() => m.clearSegmentOverride(selectedSeg)}
+                onClose={() => setSelectedSeg(null)}
+              />
+            )}
+          </div>
         )}
       </section>
 

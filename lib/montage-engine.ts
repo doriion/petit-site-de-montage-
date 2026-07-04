@@ -346,15 +346,12 @@ export function buildDynamicEDL(
   baseCutEvery = 2
 ): EDL {
   const base = Math.max(1, Math.floor(baseCutEvery));
-  const stepFor = (z: EnergyZone): number =>
-    z === "low" ? base * 2 : z === "high" ? Math.max(1, Math.ceil(base / 2)) : base;
-
   const byBeat = classifyBeats(analysis.beats, curve);
   const cuts: Cut[] = [];
   let since = Infinity; // ≥ n'importe quel pas → coupe dès le premier beat
   analysis.beats.forEach((time, beatIndex) => {
     const b = byBeat[beatIndex];
-    if (since >= stepFor(b.zone)) {
+    if (since >= zoneStep(b.zone, base)) {
       cuts.push({ time, beatIndex, energy: b.energy, zone: b.zone });
       since = 1;
     } else {
@@ -362,6 +359,20 @@ export function buildDynamicEDL(
     }
   });
   return { cuts, cutEvery: base };
+}
+
+/**
+ * Cadence effective (en beats) pour une zone, modulée autour de la base :
+ * low = base×2, mid = base, high = base÷2 arrondi sup., plancher 1. C'est LA
+ * référence — buildDynamicEDL et les explications pédagogiques l'utilisent.
+ */
+export function zoneStep(zone: EnergyZone, baseCutEvery: number): number {
+  const base = Math.max(1, Math.floor(baseCutEvery));
+  return zone === "low"
+    ? base * 2
+    : zone === "high"
+      ? Math.max(1, Math.ceil(base / 2))
+      : base;
 }
 
 /**

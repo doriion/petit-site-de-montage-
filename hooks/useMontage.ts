@@ -37,13 +37,17 @@ import {
   type Envelope,
 } from "@/lib/montage-engine";
 import {
+  applyClipOverrides,
+  applyInPointOverrides,
   assignTransitions,
   computeInPoints,
   drawCover,
   findSegmentIndex,
   formatTime,
+  structureSignature,
   type Clip,
   type Segment,
+  type SegmentOverride,
 } from "@/lib/preview";
 import { VideoSlot } from "@/lib/player";
 import { DEFAULT_EFFECTS, effectsForCut } from "@/lib/effects";
@@ -77,6 +81,12 @@ export function useMontage() {
   );
   const [analysis, setAnalysis] = useState<BeatAnalysis | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
+  // Retouches par segment (panneau d'inspection), stockées À PART des
+  // segments générés. Réappliquées à chaque re-calcul tant que la structure
+  // (les temps de coupe) ne change pas.
+  const [overrides, setOverrides] = useState<Map<number, SegmentOverride>>(
+    () => new Map()
+  );
   const [sensitivity, setSensitivity] = useState(1.45);
   const [cutEvery, setCutEvery] = useState(2);
   const [dynamicCut, setDynamicCut] = useState(true);
@@ -92,6 +102,7 @@ export function useMontage() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const envelopeRef = useRef<Envelope | null>(null);
   const curveRef = useRef<EnergyCurve | null>(null);
+  const structureSigRef = useRef("");
 
   // Les deux slots de lecture (voir lib/player.ts). Init paresseuse.
   const slotsRef = useRef<[VideoSlot, VideoSlot] | null>(null);
@@ -543,6 +554,41 @@ export function useMontage() {
     renderFrame();
   }, [stop, activateSegment, renderFrame]);
 
+  /** Cale la lecture au début d'un segment (tap sur la timeline). */
+  const seekToSegment = useCallback(
+    (index: number) => {
+      const audio = audioRef.current;
+      const segs = segmentsRef.current;
+      if (!audio || index < 0 || index >= segs.length) return;
+      audio.currentTime = Math.min(segs[index].start + 0.001, segs[index].end);
+      segIndexRef.current = index;
+      activateSegment(index, true);
+      renderFrame(); // playhead/label tout de suite (et frame quand prête)
+    },
+    [activateSegment, renderFrame]
+  );
+
+  /* ------------------------ overrides par segment ------------------------- */
+  const setSegmentOverride = useCallback(
+    (index: number, patch: SegmentOverride) => {
+      setOverrides((prev) => {
+        const m = new Map(prev);
+        m.set(index, { ...prev.get(index), ...patch });
+        return m;
+      });
+    },
+    []
+  );
+
+  const clearSegmentOverride = useCallback((index: number) => {
+    setOverrides((prev) => {
+      if (!prev.has(index)) return prev;
+      const m = new Map(prev);
+      m.delete(index);
+      return m;
+    });
+  }, []);
+
   /* ------------------------------- effets --------------------------------- */
 
   // Miroirs (déclarés avant les effets qui les consomment).
@@ -603,9 +649,25 @@ export function useMontage() {
     // uniquement — l'EDL ne change pas).
     segs = assignTransitions(segs, effectsRef.current.crossfade.everyNth);
 
+    // Overrides par segment : valables tant que la structure (les temps de
+    // coupe) est identique. Structure changée → retouches caduques.
+    const sig = structureSignature(segs);
+    if (sig !== structureSigRef.current) {
+      structureSigRef.current = sig;
+      if (overrides.size > 0) {
+        setOverrides(new Map());
+        return; // l'effet re-tourne aussitôt avec la map vide
+      }
+    }
+
+    // Clip imposé AVANT computeInPoints (le point d'entrée calculé doit
+    // correspondre au bon clip), point d'entrée imposé APRÈS.
+    segs = applyClipOverrides(segs, overrides, clips.length);
     const durs = clips.map((c) => clipDurations.get(c.id));
-    setSegments(computeInPoints(segs, durs, analysis.duration));
-  }, [analysis, cutEvery, dynamicCut, clips, clipDurations]);
+    segs = computeInPoints(segs, durs, analysis.duration);
+    segs = applyInPointOverrides(segs, overrides);
+    setSegments(segs);
+  }, [analysis, cutEvery, dynamicCut, clips, clipDurations, overrides]);
 
   // Nouveau mapping segments/clips : tout ce qui est préparé est caduc.
   // On re-prépare à la position courante (et on redessine si à l'arrêt).
@@ -659,8 +721,10 @@ export function useMontage() {
     audioMeta,
     audioUrl,
     clips,
+    clipDurations,
     analysis,
     segments,
+    overrides,
     sensitivity,
     cutEvery,
     dynamicCut,
@@ -681,6 +745,9 @@ export function useMontage() {
     setDynamicCut,
     togglePlay,
     seekToRatio,
+    seekToSegment,
+    setSegmentOverride,
+    clearSegmentOverride,
     onEnded,
   };
 }

@@ -66,6 +66,60 @@ export function computeInPoints(
 }
 
 /**
+ * Retouche manuelle d'un segment (panneau d'inspection). Stockée À PART des
+ * segments générés, indexée par position du segment, et réappliquée à chaque
+ * re-calcul d'EDL tant que la structure (les temps de coupe) ne change pas.
+ */
+export interface SegmentOverride {
+  /** Clip imposé (index dans la liste des clips importés). */
+  sourceIndex?: number;
+  /** Point d'entrée imposé dans le clip (s). */
+  inPoint?: number;
+}
+
+/**
+ * Applique les overrides de clip. À faire AVANT computeInPoints, pour que le
+ * point d'entrée calculé corresponde au bon clip. Un override qui pointe vers
+ * un clip disparu est ignoré (le mapping généré reprend la main).
+ */
+export function applyClipOverrides(
+  segments: Segment[],
+  overrides: ReadonlyMap<number, SegmentOverride>,
+  clipCount: number
+): Segment[] {
+  if (overrides.size === 0) return segments;
+  return segments.map((s, i) => {
+    const o = overrides.get(i);
+    if (!o || o.sourceIndex === undefined) return s;
+    if (o.sourceIndex < 0 || o.sourceIndex >= clipCount) return s;
+    return { ...s, sourceIndex: o.sourceIndex };
+  });
+}
+
+/** Applique les overrides de point d'entrée. À faire APRÈS computeInPoints. */
+export function applyInPointOverrides(
+  segments: Segment[],
+  overrides: ReadonlyMap<number, SegmentOverride>
+): Segment[] {
+  if (overrides.size === 0) return segments;
+  return segments.map((s, i) => {
+    const o = overrides.get(i);
+    if (!o || o.inPoint === undefined || o.inPoint < 0) return s;
+    return { ...s, inPoint: o.inPoint };
+  });
+}
+
+/**
+ * Signature de la structure du montage : les temps de coupe. Tant qu'elle est
+ * identique d'un re-calcul à l'autre, les overrides par segment restent
+ * valables (ajouter/retirer des clips ne change pas les coupes) ; si elle
+ * change (sensibilité, cadence, toggle dynamique), ils sont caducs.
+ */
+export function structureSignature(segments: Segment[]): string {
+  return segments.map((s) => s.start.toFixed(2)).join("|");
+}
+
+/**
  * En zone low uniquement, remplace une coupe sur `everyNth` par un fondu
  * enchaîné : le 2e, 4e… segment low (dans l'ordre de la timeline) est marqué
  * `transition: "crossfade"`. Annotation de présentation — l'EDL ne change pas.

@@ -57,8 +57,15 @@ npm run lint                 # ESLint (next/core-web-vitals)
    et une boucle `requestAnimationFrame` qui lit `audio.currentTime` comme
    horloge maître et dessine le slot courant sur le canvas (playhead/canvas
    écrits en DOM direct, pas de `setState` à 60 fps).
-6. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
-   timeline), `Controls` (sliders), `ClipTray` (vignettes), `Dropzone`.
+6. **`lib/explain.ts`** — la couche pédagogique : une phrase courte en
+   français qui explique la décision de montage de chaque plan (zone, énergie,
+   cadence, transition, effets), par templates variés — pas d'IA, instantané.
+7. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
+   transport), `Timeline` (blocs par segment colorés par zone, tap = seek +
+   inspection), `SegmentInspector` (explication + retouches par plan : clip
+   assigné et point d'entrée, stockées en overrides qui survivent aux
+   re-calculs tant que les coupes ne bougent pas), `Controls`, `ClipTray`,
+   `Dropzone`.
 
 ## Réglages
 
