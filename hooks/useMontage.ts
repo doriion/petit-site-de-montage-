@@ -52,6 +52,7 @@ import {
 import { VideoSlot } from "@/lib/player";
 import { DEFAULT_EFFECTS, effectsForCut } from "@/lib/effects";
 import { DEFAULT_EXPORT, drawWatermark, pickExportMimeType } from "@/lib/exporter";
+import { applyMotionInPoints, MotionAnalyzer, type ClipMotion } from "@/lib/motion";
 
 export type Status = "idle" | "analyzing" | "ready" | "error";
 
@@ -89,6 +90,11 @@ export function useMontage() {
   const [clipDurations, setClipDurations] = useState<Map<string, number>>(
     () => new Map()
   );
+  // Courbe de mouvement par clip : absente = analyse en cours, null = échec
+  // (dans les deux cas, le point d'entrée proportionnel reste le repli).
+  const [clipMotion, setClipMotion] = useState<Map<string, ClipMotion | null>>(
+    () => new Map()
+  );
   const [analysis, setAnalysis] = useState<BeatAnalysis | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   // Retouches par segment (panneau d'inspection), stockées À PART des
@@ -116,6 +122,7 @@ export function useMontage() {
   const envelopeRef = useRef<Envelope | null>(null);
   const curveRef = useRef<EnergyCurve | null>(null);
   const structureSigRef = useRef("");
+  const motionAnalyzerRef = useRef<MotionAnalyzer | null>(null);
 
   // Les deux slots de lecture (voir lib/player.ts). Init paresseuse.
   const slotsRef = useRef<[VideoSlot, VideoSlot] | null>(null);
@@ -244,27 +251,56 @@ export function useMontage() {
   );
 
   /* ------------------------------- clips --------------------------------- */
-  const addClips = useCallback((files: FileList | File[]) => {
-    // Certains OS mobiles livrent un MIME vide : on se rabat sur l'extension.
-    const isVideo = (f: File) =>
-      f.type.startsWith("video/") ||
-      (f.type === "" && /\.(mp4|mov|webm|m4v)$/i.test(f.name));
-    const list = Array.from(files).filter(isVideo);
-    if (list.length === 0) return;
-    setClips((prev) => [
-      ...prev,
-      ...list.map((f) => ({
+  /**
+   * Analyse de mouvement asynchrone et non bloquante : la file interne de
+   * l'analyseur garantit qu'un seul clip est traité à la fois (un unique
+   * <video> de travail — mobile). La preview reste utilisable pendant ce
+   * temps ; tant que la courbe n'est pas là, le proportionnel fait foi.
+   */
+  const analyzeClip = useCallback((clip: Clip) => {
+    if (!motionAnalyzerRef.current) {
+      motionAnalyzerRef.current = new MotionAnalyzer();
+    }
+    void motionAnalyzerRef.current.analyze(clip.url).then((res) => {
+      // Clip retiré pendant l'analyse : on n'en garde pas trace.
+      if (!clipsRef.current.some((c) => c.id === clip.id)) return;
+      setClipMotion((prev) => {
+        const m = new Map(prev);
+        m.set(clip.id, res);
+        return m;
+      });
+    });
+  }, []);
+
+  const addClips = useCallback(
+    (files: FileList | File[]) => {
+      // Certains OS mobiles livrent un MIME vide : on se rabat sur l'extension.
+      const isVideo = (f: File) =>
+        f.type.startsWith("video/") ||
+        (f.type === "" && /\.(mp4|mov|webm|m4v)$/i.test(f.name));
+      const list = Array.from(files).filter(isVideo);
+      if (list.length === 0) return;
+      const added: Clip[] = list.map((f) => ({
         id: makeId(),
         name: f.name,
         url: URL.createObjectURL(f),
-      })),
-    ]);
-  }, []);
+      }));
+      setClips((prev) => [...prev, ...added]);
+      added.forEach(analyzeClip);
+    },
+    [analyzeClip]
+  );
 
   const removeClip = useCallback((id: string) => {
     // Décharge le clip des slots AVANT de révoquer son URL.
     slotsRef.current?.forEach((s) => s.detachClip(id));
     setClipDurations((prev) => {
+      if (!prev.has(id)) return prev;
+      const m = new Map(prev);
+      m.delete(id);
+      return m;
+    });
+    setClipMotion((prev) => {
       if (!prev.has(id)) return prev;
       const m = new Map(prev);
       m.delete(id);
@@ -280,6 +316,7 @@ export function useMontage() {
   const clearClips = useCallback(() => {
     slotsRef.current?.forEach((s) => s.reset());
     setClipDurations(new Map());
+    setClipMotion(new Map());
     setClips((prev) => {
       prev.forEach((c) => URL.revokeObjectURL(c.url));
       return [];
@@ -895,13 +932,16 @@ export function useMontage() {
     }
 
     // Clip imposé AVANT computeInPoints (le point d'entrée calculé doit
-    // correspondre au bon clip), point d'entrée imposé APRÈS.
+    // correspondre au bon clip). Puis : proportionnel → choix par mouvement
+    // (quand la courbe du clip est là) → overrides manuels (priorité).
     segs = applyClipOverrides(segs, overrides, clips.length);
     const durs = clips.map((c) => clipDurations.get(c.id));
     segs = computeInPoints(segs, durs, analysis.duration);
+    const motions = clips.map((c) => clipMotion.get(c.id) ?? undefined);
+    segs = applyMotionInPoints(segs, motions);
     segs = applyInPointOverrides(segs, overrides);
     setSegments(segs);
-  }, [analysis, cutEvery, dynamicCut, clips, clipDurations, overrides]);
+  }, [analysis, cutEvery, dynamicCut, clips, clipDurations, clipMotion, overrides]);
 
   // Nouveau mapping segments/clips : tout ce qui est préparé est caduc.
   // On re-prépare à la position courante (et on redessine si à l'arrêt).
@@ -965,6 +1005,7 @@ export function useMontage() {
     audioUrl,
     clips,
     clipDurations,
+    clipMotion,
     analysis,
     segments,
     overrides,

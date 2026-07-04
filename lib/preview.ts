@@ -25,6 +25,14 @@ export interface Segment {
   zone?: EnergyZone;
   /** Comment on ENTRE dans ce segment. Absent = coupe franche. */
   transition?: "cut" | "crossfade";
+  /** Mouvement visuel (0-1) du clip autour du point d'entrée choisi. */
+  motion?: number;
+  /**
+   * Provenance du point d'entrée : choisi par l'analyse de mouvement, ou
+   * repli proportionnel. Absent = pas de courbe de mouvement (ou override
+   * manuel, qui garde la priorité et ne revendique rien).
+   */
+  inPointPick?: "motion" | "proportional";
 }
 
 /** Un clip vidéo importé par l'utilisateur. */
@@ -96,7 +104,11 @@ export function applyClipOverrides(
   });
 }
 
-/** Applique les overrides de point d'entrée. À faire APRÈS computeInPoints. */
+/**
+ * Applique les overrides de point d'entrée. À faire APRÈS computeInPoints et
+ * après le choix par mouvement : le réglage manuel garde la priorité, et il
+ * efface la provenance automatique (l'explication ne revendique alors rien).
+ */
 export function applyInPointOverrides(
   segments: Segment[],
   overrides: ReadonlyMap<number, SegmentOverride>
@@ -105,7 +117,7 @@ export function applyInPointOverrides(
   return segments.map((s, i) => {
     const o = overrides.get(i);
     if (!o || o.inPoint === undefined || o.inPoint < 0) return s;
-    return { ...s, inPoint: o.inPoint };
+    return { ...s, inPoint: o.inPoint, inPointPick: undefined, motion: undefined };
   });
 }
 

@@ -4,6 +4,8 @@ import type { Clip } from "@/lib/preview";
 
 interface ClipTrayProps {
   clips: Clip[];
+  /** Clips dont l'analyse de mouvement est encore en cours. */
+  analyzingIds: ReadonlySet<string>;
   onMeta: (id: string, duration: number) => void;
   onRemove: (id: string) => void;
   onClear: () => void;
@@ -18,6 +20,7 @@ interface ClipTrayProps {
  */
 export default function ClipTray({
   clips,
+  analyzingIds,
   onMeta,
   onRemove,
   onClear,
@@ -67,6 +70,15 @@ export default function ClipTray({
             <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-accent">
               {i + 1}
             </span>
+            {analyzingIds.has(clip.id) && (
+              <span
+                data-analyzing
+                className="pointer-events-none absolute bottom-7 left-1.5 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[9px] text-accent"
+              >
+                <span className="h-1 w-1 animate-pulse rounded-full bg-accent" />
+                analyse…
+              </span>
+            )}
             <button
               type="button"
               onClick={() => onRemove(clip.id)}

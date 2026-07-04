@@ -28,6 +28,35 @@ const cad = (step: number) =>
   step === 1 ? "à chaque beat" : `tous les ${step} beats`;
 
 export function explainSegment(seg: Segment, ctx: ExplainContext): string {
+  return baseExplanation(seg, ctx) + motionMention(seg, ctx.index);
+}
+
+/**
+ * Mention ajoutée quand le point d'entrée dans le clip a été choisi par
+ * l'analyse de mouvement (et pas par le repli proportionnel ni à la main).
+ */
+function motionMention(seg: Segment, index: number): string {
+  if (seg.inPointPick !== "motion") return "";
+  const pick = (variants: string[]) => variants[index % variants.length];
+  if (seg.zone === "high") {
+    return (
+      " " +
+      pick([
+        "Passage choisi parce qu'il bouge — on le cale sur le moment fort.",
+        "Le plan démarre sur un moment du clip qui bouge.",
+      ])
+    );
+  }
+  return (
+    " " +
+    pick([
+      "Un passage calme du clip a été choisi pour coller à l'accalmie.",
+      "Le plan démarre sur un moment posé du clip.",
+    ])
+  );
+}
+
+function baseExplanation(seg: Segment, ctx: ExplainContext): string {
   const pick = (variants: string[]) => variants[ctx.index % variants.length];
   const base = Math.max(1, Math.floor(ctx.baseCutEvery));
 

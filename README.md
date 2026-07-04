@@ -46,6 +46,12 @@ npm run lint                 # ESLint (next/core-web-vitals)
    chaque segment son point d'entrée dans le clip (proportionnel à la position
    dans le morceau), `findSegmentIndex()` suit le segment actif,
    `assignTransitions()` marque une coupe low sur deux en fondu enchaîné.
+   **`lib/motion.ts`** affine ensuite : chaque clip est analysé à l'import
+   (~24 échantillons 64×36, un seul `<video>` de travail, séquentiel et non
+   bloquant) → courbe de mouvement 0-1 ; les segments high démarrent sur une
+   fenêtre du clip qui bouge, les low sur une fenêtre calme (jamais la même
+   deux fois de suite), mid et analyse-en-cours restent proportionnels. Les
+   retouches manuelles gardent la priorité.
 3. **`lib/effects.ts`** — vocabulaire d'effets piloté par l'énergie, regroupé
    dans une config (base des futurs « packs ») : flash blanc bref à l'entrée
    en zone high, micro-secousse + punch-in sur les coupes high, fondu

@@ -171,6 +171,11 @@ export default function MontageStudio() {
           />
           <ClipTray
             clips={m.clips}
+            analyzingIds={
+              new Set(
+                m.clips.filter((c) => !m.clipMotion.has(c.id)).map((c) => c.id)
+              )
+            }
             onMeta={m.onClipMeta}
             onRemove={m.removeClip}
             onClear={m.clearClips}

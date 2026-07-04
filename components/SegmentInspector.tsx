@@ -124,6 +124,11 @@ export default function SegmentInspector({
             énergie {Math.round(segment.energy * 100)} %
           </span>
         )}
+        {segment.motion !== undefined && (
+          <span className="rounded-full bg-ink-700 px-2 py-0.5 text-zinc-400">
+            mouvement {Math.round(segment.motion * 100)} %
+          </span>
+        )}
         <span className="rounded-full bg-ink-700 px-2 py-0.5 text-zinc-400">
           {(segment.end - segment.start).toFixed(1)} s
         </span>
