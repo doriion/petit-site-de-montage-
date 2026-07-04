@@ -51,12 +51,22 @@ import {
 } from "@/lib/preview";
 import { VideoSlot } from "@/lib/player";
 import { DEFAULT_EFFECTS, effectsForCut } from "@/lib/effects";
+import { DEFAULT_EXPORT, drawWatermark, pickExportMimeType } from "@/lib/exporter";
 
 export type Status = "idle" | "analyzing" | "ready" | "error";
 
 export interface AudioMeta {
   name: string;
   duration: number;
+}
+
+export interface ExportResult {
+  url: string;
+  filename: string;
+  mime: string;
+  size: number;
+  /** Partage natif (navigator.share avec fichiers) disponible ? */
+  canShare: boolean;
 }
 
 const RENDER_W = 1280;
@@ -91,6 +101,9 @@ export function useMontage() {
   const [cutEvery, setCutEvery] = useState(2);
   const [dynamicCut, setDynamicCut] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportResult, setExportResult] = useState<ExportResult | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   /* --------------------------------- refs -------------------------------- */
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -127,6 +140,25 @@ export function useMontage() {
     toIdx: number;
     start: number;
   } | null>(null); // fondu enchaîné en cours
+
+  // Export (Phase 2a) : enregistrement du canvas + audio pendant une passe
+  // de lecture dédiée. Voir lib/exporter.ts pour la config (filigrane…).
+  const exportCfgRef = useRef(DEFAULT_EXPORT);
+  const exportingRef = useRef(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const exportCancelledRef = useRef(false);
+  const exportBlobRef = useRef<Blob | null>(null);
+  const exportUrlRef = useRef<string | null>(null);
+  const wakeLockRef = useRef<{ release(): Promise<void> } | null>(null);
+  // Routage audio : une fois createMediaElementSource appelé sur l'élément,
+  // sa sortie passe DÉFINITIVEMENT par l'AudioContext → on ne route qu'une
+  // fois, vers les haut-parleurs ET la destination d'enregistrement.
+  const mediaRouteRef = useRef<{
+    el: HTMLAudioElement;
+    streamDest: MediaStreamAudioDestinationNode;
+  } | null>(null);
+  const exportBarRef = useRef<HTMLDivElement | null>(null);
+  const exportTimeRef = useRef<HTMLSpanElement | null>(null);
   const rafRef = useRef(0);
   const playingRef = useRef(false);
   const renderFrameRef = useRef<() => void>(() => {});
@@ -368,6 +400,16 @@ export function useMontage() {
       timeLabelRef.current.textContent = formatTime(t, 1);
     }
 
+    // Progression d'export (DOM direct, même principe que le playhead).
+    if (exportingRef.current) {
+      if (exportBarRef.current && dur > 0) {
+        exportBarRef.current.style.width = `${Math.min(100, (t / dur) * 100)}%`;
+      }
+      if (exportTimeRef.current) {
+        exportTimeRef.current.textContent = `${formatTime(t)} / ${formatTime(dur)}`;
+      }
+    }
+
     const cfg = effectsRef.current;
     const segs = segmentsRef.current;
     const idx = findSegmentIndex(segs, t, Math.max(0, segIndexRef.current));
@@ -388,6 +430,9 @@ export function useMontage() {
       activateSegment(idx, false);
     }
 
+    // `painted` : une frame vient d'être posée sur le canvas (le filigrane
+    // d'export ne se dessine que dans ce cas, sinon son alpha s'accumule).
+    let painted = false;
     if (idx >= 0 && clipsRef.current.length > 0 && slotsRef.current) {
       const slots = slotsRef.current;
       const slot = slots[currentSlotIdxRef.current];
@@ -402,17 +447,18 @@ export function useMontage() {
           slots[fade.fromSlot].el?.pause();
           fadeRef.current = null;
           prepareNextAfter(idx);
-          if (ready) drawCover(ctx, v!, canvas.width, canvas.height);
+          if (ready) painted = drawCover(ctx, v!, canvas.width, canvas.height);
         } else {
           // Alpha croisé : l'ancien plein dessous, le nouveau qui monte dessus.
           const from = slots[fade.fromSlot].el;
           let base = false;
           if (from && from.readyState >= 2) {
             base = drawCover(ctx, from, canvas.width, canvas.height);
+            painted = painted || base;
           }
           if (ready) {
             ctx.globalAlpha = base ? Math.min(1, Math.max(0, p)) : 1;
-            drawCover(ctx, v!, canvas.width, canvas.height);
+            painted = drawCover(ctx, v!, canvas.width, canvas.height) || painted;
             ctx.globalAlpha = 1;
           }
         }
@@ -439,10 +485,10 @@ export function useMontage() {
           if (dx !== 0 || dy !== 0) {
             ctx.save();
             ctx.translate(dx, dy);
-            drawCover(ctx, v!, canvas.width, canvas.height, zoom);
+            painted = drawCover(ctx, v!, canvas.width, canvas.height, zoom);
             ctx.restore();
           } else {
-            drawCover(ctx, v!, canvas.width, canvas.height, zoom);
+            painted = drawCover(ctx, v!, canvas.width, canvas.height, zoom);
           }
         }
         // Sinon : préparation en cours → on fige la dernière frame dessinée
@@ -460,6 +506,18 @@ export function useMontage() {
     } else {
       ctx.fillStyle = "#0a0a0f";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+      painted = true;
+    }
+
+    // Filigrane UNIQUEMENT pendant l'export (voir lib/exporter.ts — l'offre
+    // payante passera watermark à false).
+    if (painted && exportingRef.current && exportCfgRef.current.watermark) {
+      drawWatermark(
+        ctx,
+        canvas.width,
+        canvas.height,
+        exportCfgRef.current.watermarkText
+      );
     }
 
     // Décroissance du punch-in (frame-synced, ~1/3 s).
@@ -483,6 +541,12 @@ export function useMontage() {
     const audio = audioRef.current;
     const slots = slotsRef.current;
     if (!audio || !slots || clipsRef.current.length === 0) return;
+
+    // Une fois l'élément routé via l'AudioContext (export), un contexte
+    // suspendu couperait TOUT le son : on le relance par sécurité.
+    if (audioCtxRef.current?.state === "suspended") {
+      audioCtxRef.current.resume().catch(() => {});
+    }
 
     // Fin de morceau : on repart du début.
     const dur = durationRef.current || audio.duration || 0;
@@ -545,14 +609,36 @@ export function useMontage() {
     [activateSegment, renderFrame]
   );
 
+  /**
+   * Clôt l'enregistrement en cours. `keep=false` = annulation (le résultat
+   * est jeté). Le blob final arrive de façon asynchrone dans recorder.onstop.
+   */
+  const finishExport = useCallback((keep: boolean) => {
+    if (!exportingRef.current) return;
+    exportingRef.current = false;
+    if (!keep) exportCancelledRef.current = true;
+    try {
+      recorderRef.current?.stop();
+    } catch {
+      /* recorder déjà arrêté */
+    }
+    recorderRef.current = null;
+    wakeLockRef.current?.release().catch(() => {});
+    wakeLockRef.current = null;
+    setExporting(false);
+  }, []);
+
   const onEnded = useCallback(() => {
+    const wasExporting = exportingRef.current;
     stop();
     const audio = audioRef.current;
     if (audio) audio.currentTime = 0;
     segIndexRef.current = segmentsRef.current.length > 0 ? 0 : -1;
     if (segIndexRef.current === 0) activateSegment(0, true);
     renderFrame();
-  }, [stop, activateSegment, renderFrame]);
+    // Fin de la passe d'export : le morceau est fini, on finalise le fichier.
+    if (wasExporting) finishExport(true);
+  }, [stop, activateSegment, renderFrame, finishExport]);
 
   /** Cale la lecture au début d'un segment (tap sur la timeline). */
   const seekToSegment = useCallback(
@@ -589,6 +675,151 @@ export function useMontage() {
     });
   }, []);
 
+  /* ------------------------------- export --------------------------------- */
+  const clearExport = useCallback(() => {
+    setExportResult((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+    exportBlobRef.current = null;
+    setExportError(null);
+  }, []);
+
+  const startExport = useCallback(async () => {
+    const audio = audioRef.current;
+    const canvas = canvasRef.current;
+    if (!audio || !canvas || exportingRef.current) return;
+    if (clipsRef.current.length === 0 || segmentsRef.current.length === 0) return;
+
+    clearExport();
+
+    const support =
+      typeof MediaRecorder !== "undefined"
+        ? pickExportMimeType((t) => MediaRecorder.isTypeSupported(t))
+        : null;
+    if (!support) {
+      setExportError("Export non supporté par ce navigateur.");
+      return;
+    }
+
+    // Routage audio : élément → haut-parleurs + destination d'enregistrement.
+    // Sans la double connexion, l'un des deux se coupe. Une seule fois par
+    // élément (createMediaElementSource est définitif).
+    const actx = getAudioCtx();
+    try {
+      await actx.resume();
+    } catch {
+      /* le play() qui suit retentera */
+    }
+    try {
+      if (!mediaRouteRef.current || mediaRouteRef.current.el !== audio) {
+        const source = actx.createMediaElementSource(audio);
+        const streamDest = actx.createMediaStreamDestination();
+        source.connect(actx.destination);
+        source.connect(streamDest);
+        mediaRouteRef.current = { el: audio, streamDest };
+      }
+    } catch (e) {
+      console.error(e);
+      setExportError("Impossible de router l'audio pour l'export.");
+      return;
+    }
+
+    // Pistes : canvas (vidéo) + destination audio.
+    const cfg = exportCfgRef.current;
+    const canvasStream = canvas.captureStream(cfg.fps);
+    const tracks = [
+      ...canvasStream.getVideoTracks(),
+      ...mediaRouteRef.current.streamDest.stream.getAudioTracks(),
+    ];
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(new MediaStream(tracks), {
+        mimeType: support.mimeType,
+        videoBitsPerSecond: cfg.videoBitsPerSecond,
+      });
+    } catch (e) {
+      console.error(e);
+      canvasStream.getTracks().forEach((t) => t.stop());
+      setExportError("Impossible de démarrer l'enregistreur vidéo.");
+      return;
+    }
+
+    const chunks: Blob[] = [];
+    exportCancelledRef.current = false;
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+    recorder.onstop = () => {
+      canvasStream.getTracks().forEach((t) => t.stop());
+      if (exportCancelledRef.current) return;
+      const blob = new Blob(chunks, { type: support.mimeType.split(";")[0] });
+      const filename = `montage-${new Date().toISOString().slice(0, 10)}.${support.extension}`;
+      exportBlobRef.current = blob;
+      let canShare = false;
+      try {
+        canShare = !!navigator.canShare?.({
+          files: [new File([blob], filename, { type: blob.type })],
+        });
+      } catch {
+        canShare = false;
+      }
+      setExportResult({
+        url: URL.createObjectURL(blob),
+        filename,
+        mime: blob.type,
+        size: blob.size,
+        canShare,
+      });
+    };
+    recorderRef.current = recorder;
+
+    // Wake lock : l'écran mobile ne doit pas s'éteindre pendant la passe.
+    try {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request(type: "screen"): Promise<{ release(): Promise<void> }> };
+      };
+      wakeLockRef.current = (await nav.wakeLock?.request("screen")) ?? null;
+    } catch {
+      wakeLockRef.current = null; // refusé/absent : on exporte quand même
+    }
+
+    exportingRef.current = true;
+    setExporting(true);
+
+    // Passe dédiée : du tout début à la fin (onEnded finalisera).
+    seekToRatio(0);
+    recorder.start();
+    await play();
+    if (audio.paused) {
+      // Lecture bloquée par le navigateur : on annule proprement.
+      finishExport(false);
+      setExportError("Le navigateur a bloqué la lecture. Réessaie l'export.");
+    }
+  }, [clearExport, getAudioCtx, seekToRatio, play, finishExport]);
+
+  const cancelExport = useCallback(() => {
+    if (!exportingRef.current) return;
+    finishExport(false);
+    stop();
+  }, [finishExport, stop]);
+
+  /** Partage natif (mobile). Renvoie false si non supporté ou annulé. */
+  const shareExport = useCallback(async (): Promise<boolean> => {
+    const blob = exportBlobRef.current;
+    if (!blob || !exportResult) return false;
+    const file = new File([blob], exportResult.filename, { type: blob.type });
+    try {
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "Mon montage" });
+        return true;
+      }
+    } catch {
+      /* partage annulé par l'utilisateur : pas une erreur */
+    }
+    return false;
+  }, [exportResult]);
+
   /* ------------------------------- effets --------------------------------- */
 
   // Miroirs (déclarés avant les effets qui les consomment).
@@ -598,6 +829,9 @@ export function useMontage() {
   useEffect(() => {
     audioUrlRef.current = audioUrl;
   }, [audioUrl]);
+  useEffect(() => {
+    exportUrlRef.current = exportResult?.url ?? null;
+  }, [exportResult]);
 
   // Re-pick des beats quand la sensibilité bouge (sans re-analyser l'enveloppe).
   useEffect(() => {
@@ -688,12 +922,21 @@ export function useMontage() {
   useEffect(() => {
     return () => {
       stopLoop();
+      exportingRef.current = false;
+      exportCancelledRef.current = true;
+      try {
+        recorderRef.current?.stop();
+      } catch {
+        /* déjà arrêté */
+      }
+      wakeLockRef.current?.release().catch(() => {});
       slotsRef.current?.forEach((s) => s.reset());
       if (audioCtxRef.current) {
         audioCtxRef.current.close().catch(() => {});
       }
       clipsRef.current.forEach((c) => URL.revokeObjectURL(c.url));
       if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+      if (exportUrlRef.current) URL.revokeObjectURL(exportUrlRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -729,6 +972,11 @@ export function useMontage() {
     cutEvery,
     dynamicCut,
     isPlaying,
+    exporting,
+    exportResult,
+    exportError,
+    exportBarRef,
+    exportTimeRef,
 
     // dérivés
     bpm,
@@ -748,6 +996,10 @@ export function useMontage() {
     seekToSegment,
     setSegmentOverride,
     clearSegmentOverride,
+    startExport,
+    cancelExport,
+    shareExport,
+    clearExport,
     onEnded,
   };
 }

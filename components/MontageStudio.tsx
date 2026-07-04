@@ -8,6 +8,7 @@ import Controls from "@/components/Controls";
 import Stage from "@/components/Stage";
 import Timeline from "@/components/Timeline";
 import SegmentInspector from "@/components/SegmentInspector";
+import ExportPanel from "@/components/ExportPanel";
 
 export default function MontageStudio() {
   const m = useMontage();
@@ -36,6 +37,7 @@ export default function MontageStudio() {
           isPlaying={m.isPlaying}
           ready={ready}
           hasClips={m.clips.length > 0}
+          locked={m.exporting}
           onTogglePlay={m.togglePlay}
           onSeekRatio={m.seekToRatio}
         />
@@ -91,11 +93,12 @@ export default function MontageStudio() {
               audioRef={m.audioRef}
               isPlaying={m.isPlaying}
               onSelect={(i) => {
+                if (m.exporting) return; // contrôles gelés pendant l'export
                 m.seekToSegment(i);
                 setSelectedSeg(i);
               }}
             />
-            {selectedSeg !== null && m.segments[selectedSeg] && (
+            {!m.exporting && selectedSeg !== null && m.segments[selectedSeg] && (
               <SegmentInspector
                 index={selectedSeg}
                 segment={m.segments[selectedSeg]}
@@ -123,6 +126,12 @@ export default function MontageStudio() {
 
       {/* --------------------------- Panneau ----------------------------- */}
       <aside className="order-1 min-w-0 space-y-6 lg:order-2">
+        {/* Import + réglages : gelés pendant l'export */}
+        <div
+          className={`space-y-6 ${
+            m.exporting ? "pointer-events-none opacity-50" : ""
+          }`}
+        >
         {/* Audio */}
         <div className="space-y-3">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
@@ -184,9 +193,27 @@ export default function MontageStudio() {
               bpm={m.bpm}
               beatCount={m.beatCount}
               cutCount={m.cutCount}
-              disabled={!ready}
+              disabled={!ready || m.exporting}
             />
           </div>
+        )}
+        </div>
+
+        {/* Export */}
+        {ready && (
+          <ExportPanel
+            ready={ready}
+            hasClips={m.clips.length > 0}
+            exporting={m.exporting}
+            result={m.exportResult}
+            error={m.exportError}
+            barRef={m.exportBarRef}
+            timeRef={m.exportTimeRef}
+            onStart={() => void m.startExport()}
+            onCancel={m.cancelExport}
+            onShare={() => void m.shareExport()}
+            onClear={m.clearExport}
+          />
         )}
       </aside>
     </div>

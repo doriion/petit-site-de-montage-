@@ -5,7 +5,9 @@ et quelques clips ; le moteur détecte les beats sur la bande du kick, construit
 une _edit decision list_ (où couper), et joue une **preview qui coupe en
 rythme** sur un `<canvas>`. Rien n'est envoyé sur un serveur.
 
-> Phase 1 = preview instantanée (ce repo). Phase 2 = export vidéo.
+> Phase 1 = preview instantanée. Phase 2a = export vidéo temps réel par
+> enregistrement du canvas (MediaRecorder), avec partage natif mobile.
+> Phase 2b (plus tard) = export hors temps réel.
 
 ## Stack
 
@@ -60,7 +62,13 @@ npm run lint                 # ESLint (next/core-web-vitals)
 6. **`lib/explain.ts`** — la couche pédagogique : une phrase courte en
    français qui explique la décision de montage de chaque plan (zone, énergie,
    cadence, transition, effets), par templates variés — pas d'IA, instantané.
-7. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
+7. **`lib/exporter.ts`** — export vidéo (Phase 2a) : pendant une passe de
+   lecture dédiée, `canvas.captureStream(30)` + l'audio routé via AudioContext
+   vers les haut-parleurs ET un `MediaStreamDestination`, muxés par
+   MediaRecorder (MP4 sur Safari, sinon WebM). Wake lock pendant la passe,
+   partage natif (`navigator.share`) avec fallback téléchargement, filigrane
+   discret uniquement à l'export (booléen — fondation freemium).
+8. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
    transport), `Timeline` (blocs par segment colorés par zone, tap = seek +
    inspection), `SegmentInspector` (explication + retouches par plan : clip
    assigné et point d'entrée, stockées en overrides qui survivent aux

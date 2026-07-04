@@ -15,6 +15,8 @@ interface StageProps {
   isPlaying: boolean;
   ready: boolean;
   hasClips: boolean;
+  /** Export en cours : transport et seek gelés. */
+  locked?: boolean;
   onTogglePlay: () => void;
   onSeekRatio: (r: number) => void;
 }
@@ -30,6 +32,7 @@ export default function Stage({
   isPlaying,
   ready,
   hasClips,
+  locked = false,
   onTogglePlay,
   onSeekRatio,
 }: StageProps) {
@@ -66,7 +69,7 @@ export default function Stage({
           <button
             type="button"
             onClick={onTogglePlay}
-            disabled={!ready || !hasClips}
+            disabled={!ready || !hasClips || locked}
             className="absolute inset-0 flex items-center justify-center bg-black/30 transition-colors hover:bg-black/10 disabled:cursor-not-allowed"
           >
             <span className="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 text-2xl text-ink-900 shadow-lg transition-transform hover:scale-105">
@@ -92,7 +95,7 @@ export default function Stage({
         <button
           type="button"
           onClick={onTogglePlay}
-          disabled={!ready || !hasClips}
+          disabled={!ready || !hasClips || locked}
           className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-lg text-ink-900 transition-transform hover:scale-105 disabled:cursor-not-allowed disabled:opacity-40"
           aria-label={isPlaying ? "Pause" : "Lecture"}
         >
@@ -101,9 +104,9 @@ export default function Stage({
 
         {/* Timeline */}
         <div
-          onClick={ready ? handleSeek : undefined}
+          onClick={ready && !locked ? handleSeek : undefined}
           className={`relative h-10 flex-1 overflow-hidden rounded-lg border border-ink-600 bg-ink-800 ${
-            ready ? "cursor-pointer" : "opacity-50"
+            ready && !locked ? "cursor-pointer" : "opacity-50"
           }`}
         >
           {/* beats */}
