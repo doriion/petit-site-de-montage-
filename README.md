@@ -81,6 +81,23 @@ npm run lint                 # ESLint (next/core-web-vitals)
    re-calculs tant que les coupes ne bougent pas), `Controls`, `ClipTray`,
    `Dropzone`.
 
+## Packs de styles
+
+Quatre points de départ (`lib/packs.ts`), sélecteur de cartes au-dessus des
+réglages — le pack applique sa config d'effets, sa cadence de base et ses
+options visuelles, puis tout reste modifiable par-dessus :
+
+| Pack | Signature |
+| --- | --- |
+| **Classique** | l'équilibre par défaut (punch + flash sur les moments forts) |
+| **Nerveux** | cadence 1, punch 8 %, secousse 10 px, flash appuyé, zéro fondu |
+| **Chill** | cadence 4, aucun effet brusque, fondu 400 ms sur toutes les coupes calmes |
+| **Cinéma** | letterbox (2×12 %), fondus 500 ms, effets discrets |
+
+Le letterbox est dessiné sur le canvas à chaque frame → il est aussi dans
+l'export. Les explications pédagogiques citent le style quand il change le
+comportement (« pas de flash ici — le style Chill adoucit tout »).
+
 ## Mode démo
 
 `public/demo/demo.json` liste une musique + des clips d'exemple. Si les

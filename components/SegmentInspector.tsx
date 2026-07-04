@@ -11,6 +11,7 @@ import { useEffect, useRef } from "react";
 import type { Clip, Segment } from "@/lib/preview";
 import { formatTime } from "@/lib/preview";
 import type { EnergyZone } from "@/lib/montage-engine";
+import type { EffectsConfig } from "@/lib/effects";
 import { explainSegment } from "@/lib/explain";
 
 const ZONE_LABEL: Record<string, string> = {
@@ -32,6 +33,9 @@ interface SegmentInspectorProps {
   clipDurations: ReadonlyMap<string, number>;
   baseCutEvery: number;
   dynamic: boolean;
+  /** Config d'effets du pack actif (pour des explications véridiques). */
+  effects: EffectsConfig;
+  packName: string;
   overridden: boolean;
   onChangeClip: (sourceIndex: number) => void;
   onChangeInPoint: (inPoint: number) => void;
@@ -47,6 +51,8 @@ export default function SegmentInspector({
   clipDurations,
   baseCutEvery,
   dynamic,
+  effects,
+  packName,
   overridden,
   onChangeClip,
   onChangeInPoint,
@@ -82,6 +88,8 @@ export default function SegmentInspector({
     baseCutEvery,
     dynamic,
     prevZone,
+    effects,
+    packName,
   });
 
   return (

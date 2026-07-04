@@ -30,7 +30,7 @@ export interface EffectsConfig {
   punchIn: { zoom: number; decay: number };
   /** Micro-secousse sur les coupes high. */
   shake: { amplitudePx: number; durationMs: number };
-  /** Fondu enchaîné en zone low, une coupe sur everyNth. */
+  /** Fondu enchaîné en zone low, une coupe sur everyNth (≤ 0 = jamais). */
   crossfade: { durationMs: number; everyNth: number };
 }
 

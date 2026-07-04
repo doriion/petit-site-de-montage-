@@ -133,15 +133,16 @@ export function structureSignature(segments: Segment[]): string {
 
 /**
  * En zone low uniquement, remplace une coupe sur `everyNth` par un fondu
- * enchaîné : le 2e, 4e… segment low (dans l'ordre de la timeline) est marqué
- * `transition: "crossfade"`. Annotation de présentation — l'EDL ne change pas.
- * Le tout premier segment low garde une coupe franche (rien à fondre avant).
+ * enchaîné (`everyNth` = 1 : toutes les coupes calmes ; ≤ 0 : fondus
+ * désactivés — pack Nerveux). Annotation de présentation — l'EDL ne change
+ * pas.
  */
 export function assignTransitions(
   segments: Segment[],
   everyNth = 2
 ): Segment[] {
-  const n = Math.max(1, Math.floor(everyNth));
+  const n = Math.floor(everyNth);
+  if (n <= 0) return segments; // fondus désactivés par le style
   let lowSeen = 0;
   return segments.map((s) => {
     if (s.zone !== "low") return s;

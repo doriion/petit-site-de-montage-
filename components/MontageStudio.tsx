@@ -3,9 +3,11 @@
 import { useEffect, useState } from "react";
 import { useMontage } from "@/hooks/useMontage";
 import { useDemo } from "@/hooks/useDemo";
+import { getPack } from "@/lib/packs";
 import Dropzone from "@/components/Dropzone";
 import ClipTray from "@/components/ClipTray";
 import Controls from "@/components/Controls";
+import PackSelector from "@/components/PackSelector";
 import Stage from "@/components/Stage";
 import Timeline from "@/components/Timeline";
 import SegmentInspector from "@/components/SegmentInspector";
@@ -32,6 +34,11 @@ export default function MontageStudio() {
       setSelectedSeg(null);
     }
   }, [m.segments.length, selectedSeg]);
+  // Changer de pack peut changer la cadence : l'index inspecté pointerait
+  // sur un autre plan — on ferme plutôt que d'afficher le mauvais.
+  useEffect(() => {
+    setSelectedSeg(null);
+  }, [m.packId]);
 
   return (
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -120,6 +127,8 @@ export default function MontageStudio() {
                 clipDurations={m.clipDurations}
                 baseCutEvery={m.cutEvery}
                 dynamic={m.dynamicCut}
+                effects={m.effectsCfg}
+                packName={getPack(m.packId).name}
                 overridden={m.overrides.has(selectedSeg)}
                 onChangeClip={(si) =>
                   m.setSegmentOverride(selectedSeg, { sourceIndex: si })
@@ -230,8 +239,13 @@ export default function MontageStudio() {
         {ready && (
           <div className="space-y-3">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-              3 · Le montage
+              3 · Le style
             </h2>
+            <PackSelector
+              activeId={m.packId}
+              disabled={!ready || m.exporting}
+              onSelect={m.setPack}
+            />
             <Controls
               sensitivity={m.sensitivity}
               cutEvery={m.cutEvery}

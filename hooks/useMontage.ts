@@ -50,7 +50,8 @@ import {
   type SegmentOverride,
 } from "@/lib/preview";
 import { VideoSlot } from "@/lib/player";
-import { DEFAULT_EFFECTS, effectsForCut } from "@/lib/effects";
+import { DEFAULT_EFFECTS, effectsForCut, type EffectsConfig } from "@/lib/effects";
+import { DEFAULT_PACK_ID, drawLetterbox, getPack } from "@/lib/packs";
 import { DEFAULT_EXPORT, drawWatermark, pickExportMimeType } from "@/lib/exporter";
 import { applyMotionInPoints, MotionAnalyzer, type ClipMotion } from "@/lib/motion";
 
@@ -106,6 +107,10 @@ export function useMontage() {
   const [sensitivity, setSensitivity] = useState(1.45);
   const [cutEvery, setCutEvery] = useState(2);
   const [dynamicCut, setDynamicCut] = useState(true);
+  // Pack de style actif + config d'effets. Le pack applique sa config et sa
+  // cadence de base d'un coup ; les réglages fins restent modifiables après.
+  const [packId, setPackId] = useState(DEFAULT_PACK_ID);
+  const [effectsCfg, setEffectsCfg] = useState<EffectsConfig>(DEFAULT_EFFECTS);
   const [isPlaying, setIsPlaying] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResult | null>(null);
@@ -138,8 +143,10 @@ export function useMontage() {
   const flashOpacityRef = useRef(0);
   const punchZoomRef = useRef(0); // punch-in : surplus de zoom, décroît à chaque frame
 
-  // Vocabulaire d'effets (voir lib/effects.ts). Ref pour les futurs packs.
+  // Miroir RAF de la config d'effets (la boucle de rendu ne lit pas d'état).
   const effectsRef = useRef(DEFAULT_EFFECTS);
+  // Option visuelle du pack : bandes letterbox dessinées à chaque frame.
+  const letterboxRef = useRef(false);
   const zoneFlashRef = useRef(0); // flash blanc d'entrée en zone high (canvas)
   const shakeUntilRef = useRef(0); // fin de la micro-secousse (performance.now)
   const fadeRef = useRef<{
@@ -322,6 +329,26 @@ export function useMontage() {
       return [];
     });
   }, []);
+
+  /** Applique un pack de style : config d'effets + cadence de base + options
+   *  visuelles. Point de départ, pas un verrou — les réglages fins restent
+   *  modifiables par-dessus. */
+  const setPack = useCallback(
+    (id: string) => {
+      const pack = getPack(id);
+      // Re-clic sur la carte déjà active : no-op — sinon setCutEvery(base)
+      // changerait la structure et effacerait les retouches par segment.
+      if (pack.id === packId) return;
+      setPackId(pack.id);
+      setEffectsCfg(pack.effects);
+      letterboxRef.current = pack.letterbox;
+      setCutEvery(pack.baseCutEvery);
+      // À l'arrêt, efface/ajoute les bandes tout de suite (sans attendre la
+      // chaîne asynchrone recalcul → re-préparation → redraw).
+      if (!playingRef.current) renderFrameRef.current();
+    },
+    [packId]
+  );
 
   /** Remonté par les vignettes de la ClipTray (loadedmetadata). */
   const onClipMeta = useCallback((id: string, duration: number) => {
@@ -533,9 +560,13 @@ export function useMontage() {
       }
 
       // Flash blanc d'entrée en zone high (1-2 frames), par-dessus la frame.
+      // Même garde `painted` que letterbox/filigrane : sur une frame figée,
+      // rien ne se composite (sinon l'alpha s'accumule et blanchit les bandes).
       if (zoneFlashRef.current > 0.02) {
-        ctx.fillStyle = `rgba(255,255,255,${zoneFlashRef.current.toFixed(3)})`;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (painted) {
+          ctx.fillStyle = `rgba(255,255,255,${zoneFlashRef.current.toFixed(3)})`;
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
         zoneFlashRef.current *= cfg.zoneFlash.decay;
       } else {
         zoneFlashRef.current = 0;
@@ -544,6 +575,12 @@ export function useMontage() {
       ctx.fillStyle = "#0a0a0f";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       painted = true;
+    }
+
+    // Letterbox du pack (Cinéma) : bandes noires par-dessus la frame (et le
+    // flash), preview ET export — l'export enregistre ce canvas tel quel.
+    if (painted && letterboxRef.current) {
+      drawLetterbox(ctx, canvas.width, canvas.height);
     }
 
     // Filigrane UNIQUEMENT pendant l'export (voir lib/exporter.ts — l'offre
@@ -869,6 +906,9 @@ export function useMontage() {
   useEffect(() => {
     exportUrlRef.current = exportResult?.url ?? null;
   }, [exportResult]);
+  useEffect(() => {
+    effectsRef.current = effectsCfg;
+  }, [effectsCfg]);
 
   // Re-pick des beats quand la sensibilité bouge (sans re-analyser l'enveloppe).
   useEffect(() => {
@@ -879,6 +919,11 @@ export function useMontage() {
 
   // (Re)calcul des segments : EDL (fixe ou dynamique) → clips → inPoints →
   // annotation énergie/zone (exposée pour la couche apprentissage).
+  // Seul champ de la config d'effets qui influe sur la STRUCTURE : le ratio
+  // de fondus. Dépendre de lui (et pas de l'objet entier) évite de recalculer
+  // — et d'invalider les slots / tuer un fondu en vol — quand un pack ne
+  // change que la présentation (letterbox, intensités).
+  const crossfadeEveryNth = effectsCfg.crossfade.everyNth;
   useEffect(() => {
     if (!analysis) {
       setSegments([]);
@@ -917,8 +962,8 @@ export function useMontage() {
     }
 
     // En zone low, une coupe sur N devient un fondu enchaîné (présentation
-    // uniquement — l'EDL ne change pas).
-    segs = assignTransitions(segs, effectsRef.current.crossfade.everyNth);
+    // uniquement — l'EDL ne change pas). Le pack peut les désactiver (≤ 0).
+    segs = assignTransitions(segs, crossfadeEveryNth);
 
     // Overrides par segment : valables tant que la structure (les temps de
     // coupe) est identique. Structure changée → retouches caduques.
@@ -941,7 +986,7 @@ export function useMontage() {
     segs = applyMotionInPoints(segs, motions);
     segs = applyInPointOverrides(segs, overrides);
     setSegments(segs);
-  }, [analysis, cutEvery, dynamicCut, clips, clipDurations, clipMotion, overrides]);
+  }, [analysis, cutEvery, dynamicCut, crossfadeEveryNth, clips, clipDurations, clipMotion, overrides]);
 
   // Nouveau mapping segments/clips : tout ce qui est préparé est caduc.
   // On re-prépare à la position courante (et on redessine si à l'arrêt).
@@ -1012,6 +1057,8 @@ export function useMontage() {
     sensitivity,
     cutEvery,
     dynamicCut,
+    packId,
+    effectsCfg,
     isPlaying,
     exporting,
     exportResult,
@@ -1032,6 +1079,7 @@ export function useMontage() {
     setSensitivity,
     setCutEvery,
     setDynamicCut,
+    setPack,
     togglePlay,
     seekToRatio,
     seekToSegment,

@@ -11,6 +11,7 @@
 
 import type { Segment } from "./preview";
 import { zoneStep, type EnergyZone } from "./montage-engine";
+import { DEFAULT_EFFECTS, type EffectsConfig } from "./effects";
 
 export interface ExplainContext {
   /** Index du segment (sert à varier les formulations, déterministe). */
@@ -21,6 +22,10 @@ export interface ExplainContext {
   dynamic: boolean;
   /** Zone du segment précédent (pour repérer les entrées de drop). */
   prevZone?: EnergyZone;
+  /** Config d'effets active — on ne revendique que ce qui se voit vraiment. */
+  effects?: EffectsConfig;
+  /** Nom du pack actif, mentionné quand il change le comportement. */
+  packName?: string;
 }
 
 const pct = (e?: number) => Math.round((e ?? 0.5) * 100);
@@ -72,32 +77,61 @@ function baseExplanation(seg: Segment, ctx: ExplainContext): string {
   const step = zoneStep(seg.zone, base);
   const e = pct(seg.energy);
 
+  // Le pack peut désactiver des effets : on ne décrit que ce qui se voit.
+  const cfg = ctx.effects ?? DEFAULT_EFFECTS;
+  const packName = ctx.packName ?? "Classique";
+  const punchOn = cfg.punchIn.zoom > 0;
+  const flashOn = cfg.zoneFlash.opacity > 0;
+  const shakeOn = cfg.shake.amplitudePx > 0 && cfg.shake.durationMs > 0;
+
   if (seg.transition === "crossfade") {
     return pick([
       `Fondu enchaîné — la musique retombe (énergie ${e} %), on adoucit le passage au lieu de couper sec.`,
-      `Moment calme : ici la coupe devient un fondu rapide, pour laisser respirer.`,
-      `Transition douce — en zone calme, une coupe sur deux se fond (énergie ${e} %).`,
+      `Moment calme : ici la coupe devient un fondu, pour laisser respirer.`,
+      `Transition douce — en zone calme, la coupe se fond (énergie ${e} %).`,
     ]);
   }
 
   switch (seg.zone) {
-    case "low":
-      return pick([
+    case "low": {
+      const text = pick([
         `Coupe posée — la musique retombe (énergie ${e} %), on laisse le plan respirer : coupe ${cad(step)}.`,
         `Passage calme : cadence ralentie (base ×2), une coupe ${cad(step)}.`,
         `On souffle — énergie ${e} %, les plans durent plus longtemps (${cad(step)}).`,
       ]);
-    case "high":
-      if (ctx.prevZone === "low" || ctx.prevZone === "mid") {
+      // Fondus désactivés par le style : la coupe reste sèche même au calme.
+      if (cfg.crossfade.everyNth <= 0) {
+        return `${text} Coupe sèche même au calme — signature du style ${packName}.`;
+      }
+      return text;
+    }
+    case "high": {
+      const entering = ctx.prevZone === "low" || ctx.prevZone === "mid";
+      const fxNames = [
+        entering && flashOn ? "flash" : null,
+        punchOn ? "punch-in" : null,
+        shakeOn ? "micro-secousse" : null,
+      ].filter((x): x is string => x !== null);
+
+      if (fxNames.length === 0) {
+        // Le style a tout adouci : on le dit, plutôt que de mentir.
         return pick([
-          `Entrée dans un passage fort : flash + coupe nerveuse (${cad(step)}) pour marquer le drop.`,
-          `Le morceau décolle (énergie ${e} %) — flash blanc, punch-in et cadence accélérée.`,
+          `Passage fort (énergie ${e} %) : cadence rapide (${cad(step)}), mais pas de flash ici — le style ${packName} adoucit tout.`,
+          `Ça monte (énergie ${e} %) — coupes ${cad(step)}, sans effet appuyé : le style ${packName} reste doux.`,
+        ]);
+      }
+      const fx = fxNames.join(" + ");
+      if (entering) {
+        return pick([
+          `Entrée dans un passage fort : ${fx} et coupe nerveuse (${cad(step)}) pour marquer le drop.`,
+          `Le morceau décolle (énergie ${e} %) — ${fx}, cadence accélérée.`,
         ]);
       }
       return pick([
-        `Ça tape (énergie ${e} %) : coupes rapprochées ${cad(step)}, punch-in et micro-secousse.`,
-        `Toujours dans le fort — cadence nerveuse (${cad(step)}), punch-in à chaque coupe.`,
+        `Ça tape (énergie ${e} %) : coupes rapprochées ${cad(step)}, ${fx}.`,
+        `Toujours dans le fort — cadence nerveuse (${cad(step)}), ${fx} à chaque coupe.`,
       ]);
+    }
     default:
       return pick([
         `Énergie moyenne (${e} %) : cadence de croisière, une coupe ${cad(step)}.`,
