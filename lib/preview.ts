@@ -23,6 +23,8 @@ export interface Segment {
   energy?: number;
   /** Zone d'énergie de la coupe qui ouvre ce segment (montage dynamique). */
   zone?: EnergyZone;
+  /** Comment on ENTRE dans ce segment. Absent = coupe franche. */
+  transition?: "cut" | "crossfade";
 }
 
 /** Un clip vidéo importé par l'utilisateur. */
@@ -60,6 +62,25 @@ export function computeInPoints(
     const raw = (s.start / montageDuration) * dur;
     const maxIn = Math.max(0, dur - segLen);
     return { ...s, inPoint: Math.min(raw, maxIn) };
+  });
+}
+
+/**
+ * En zone low uniquement, remplace une coupe sur `everyNth` par un fondu
+ * enchaîné : le 2e, 4e… segment low (dans l'ordre de la timeline) est marqué
+ * `transition: "crossfade"`. Annotation de présentation — l'EDL ne change pas.
+ * Le tout premier segment low garde une coupe franche (rien à fondre avant).
+ */
+export function assignTransitions(
+  segments: Segment[],
+  everyNth = 2
+): Segment[] {
+  const n = Math.max(1, Math.floor(everyNth));
+  let lowSeen = 0;
+  return segments.map((s) => {
+    if (s.zone !== "low") return s;
+    lowSeen++;
+    return lowSeen % n === 0 ? { ...s, transition: "crossfade" as const } : s;
   });
 }
 

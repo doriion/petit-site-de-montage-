@@ -37,6 +37,7 @@ import {
   type Envelope,
 } from "@/lib/montage-engine";
 import {
+  assignTransitions,
   computeInPoints,
   drawCover,
   findSegmentIndex,
@@ -45,6 +46,7 @@ import {
   type Segment,
 } from "@/lib/preview";
 import { VideoSlot } from "@/lib/player";
+import { DEFAULT_EFFECTS, effectsForCut } from "@/lib/effects";
 
 export type Status = "idle" | "analyzing" | "ready" | "error";
 
@@ -104,6 +106,16 @@ export function useMontage() {
   const segIndexRef = useRef(-1);
   const flashOpacityRef = useRef(0);
   const punchZoomRef = useRef(0); // punch-in : surplus de zoom, décroît à chaque frame
+
+  // Vocabulaire d'effets (voir lib/effects.ts). Ref pour les futurs packs.
+  const effectsRef = useRef(DEFAULT_EFFECTS);
+  const zoneFlashRef = useRef(0); // flash blanc d'entrée en zone high (canvas)
+  const shakeUntilRef = useRef(0); // fin de la micro-secousse (performance.now)
+  const fadeRef = useRef<{
+    fromSlot: number;
+    toIdx: number;
+    start: number;
+  } | null>(null); // fondu enchaîné en cours
   const rafRef = useRef(0);
   const playingRef = useRef(false);
   const renderFrameRef = useRef<() => void>(() => {});
@@ -277,12 +289,30 @@ export function useMontage() {
       const cur = slots[curIdx];
       const other = slots[1 - curIdx];
 
+      // Seek / mapping changé : un éventuel fondu en cours n'a plus de sens.
+      if (force) fadeRef.current = null;
+
       // Chemin chaud : le suivant est prêt, on échange les rôles.
       if (!force && other.preparedSeg === idx) {
+        const wantFade =
+          seg.transition === "crossfade" &&
+          playingRef.current &&
+          !!cur.el &&
+          cur.el.readyState >= 2;
         currentSlotIdxRef.current = 1 - curIdx;
         if (playingRef.current) other.el?.play().catch(() => {});
-        cur.el?.pause();
-        prepareNextAfter(idx);
+        if (wantFade) {
+          // Fondu : l'ancien slot continue de jouer sous le nouveau ; il sera
+          // mis en pause et re-préparé à la FIN du fondu (dans renderFrame).
+          fadeRef.current = {
+            fromSlot: curIdx,
+            toIdx: idx,
+            start: performance.now(),
+          };
+        } else {
+          cur.el?.pause();
+          prepareNextAfter(idx);
+        }
         return;
       }
 
@@ -327,42 +357,111 @@ export function useMontage() {
       timeLabelRef.current.textContent = formatTime(t, 1);
     }
 
+    const cfg = effectsRef.current;
     const segs = segmentsRef.current;
     const idx = findSegmentIndex(segs, t, Math.max(0, segIndexRef.current));
     if (idx !== segIndexRef.current) {
       if (idx >= 0 && segIndexRef.current >= 0) {
-        flashOpacityRef.current = 0.85;
-        // Punch-in uniquement sur les coupes en zone high (montage dynamique).
-        if (segs[idx].zone === "high") punchZoomRef.current = 0.05;
+        const prevZone = segs[segIndexRef.current]?.zone;
+        const seg = segs[idx];
+        // Voile de coupe seulement sur les coupes franches (pas sur un fondu).
+        if (seg.transition !== "crossfade") {
+          flashOpacityRef.current = cfg.cutFlash.opacity;
+        }
+        const fx = effectsForCut(prevZone, seg.zone, cfg);
+        if (fx.punch > 0) punchZoomRef.current = fx.punch;
+        if (fx.shakeMs > 0) shakeUntilRef.current = performance.now() + fx.shakeMs;
+        if (fx.flash > 0) zoneFlashRef.current = fx.flash;
       }
       segIndexRef.current = idx;
       activateSegment(idx, false);
     }
 
     if (idx >= 0 && clipsRef.current.length > 0 && slotsRef.current) {
-      const slot = slotsRef.current[currentSlotIdxRef.current];
+      const slots = slotsRef.current;
+      const slot = slots[currentSlotIdxRef.current];
       const v = slot.el;
-      if (v && slot.preparedSeg === idx && v.readyState >= 2) {
-        drawCover(ctx, v, canvas.width, canvas.height, 1 + punchZoomRef.current);
+      const ready = !!v && slot.preparedSeg === idx && v.readyState >= 2;
+
+      const fade = fadeRef.current;
+      if (fade && fade.toIdx === idx) {
+        const p = (performance.now() - fade.start) / cfg.crossfade.durationMs;
+        if (p >= 1) {
+          // Fin du fondu : on libère l'ancien slot et on précharge le suivant.
+          slots[fade.fromSlot].el?.pause();
+          fadeRef.current = null;
+          prepareNextAfter(idx);
+          if (ready) drawCover(ctx, v!, canvas.width, canvas.height);
+        } else {
+          // Alpha croisé : l'ancien plein dessous, le nouveau qui monte dessus.
+          const from = slots[fade.fromSlot].el;
+          let base = false;
+          if (from && from.readyState >= 2) {
+            base = drawCover(ctx, from, canvas.width, canvas.height);
+          }
+          if (ready) {
+            ctx.globalAlpha = base ? Math.min(1, Math.max(0, p)) : 1;
+            drawCover(ctx, v!, canvas.width, canvas.height);
+            ctx.globalAlpha = 1;
+          }
+        }
+      } else {
+        if (fade) {
+          // Fondu orphelin (le playhead a quitté son segment) : clôture.
+          if (fade.fromSlot !== currentSlotIdxRef.current) {
+            slots[fade.fromSlot].el?.pause();
+          }
+          fadeRef.current = null;
+        }
+        if (ready) {
+          // Micro-secousse : translation aléatoire décroissante. Couplée au
+          // punch-in sur les coupes high, dont la marge couvre les bords.
+          let dx = 0;
+          let dy = 0;
+          const shakeLeft = shakeUntilRef.current - performance.now();
+          if (shakeLeft > 0) {
+            const k = shakeLeft / cfg.shake.durationMs;
+            dx = (Math.random() * 2 - 1) * cfg.shake.amplitudePx * k;
+            dy = (Math.random() * 2 - 1) * cfg.shake.amplitudePx * k;
+          }
+          const zoom = 1 + punchZoomRef.current;
+          if (dx !== 0 || dy !== 0) {
+            ctx.save();
+            ctx.translate(dx, dy);
+            drawCover(ctx, v!, canvas.width, canvas.height, zoom);
+            ctx.restore();
+          } else {
+            drawCover(ctx, v!, canvas.width, canvas.height, zoom);
+          }
+        }
+        // Sinon : préparation en cours → on fige la dernière frame dessinée
+        // plutôt que de flasher du noir.
       }
-      // Sinon : préparation en cours → on fige la dernière frame dessinée
-      // plutôt que de flasher du noir.
+
+      // Flash blanc d'entrée en zone high (1-2 frames), par-dessus la frame.
+      if (zoneFlashRef.current > 0.02) {
+        ctx.fillStyle = `rgba(255,255,255,${zoneFlashRef.current.toFixed(3)})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        zoneFlashRef.current *= cfg.zoneFlash.decay;
+      } else {
+        zoneFlashRef.current = 0;
+      }
     } else {
       ctx.fillStyle = "#0a0a0f";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
 
     // Décroissance du punch-in (frame-synced, ~1/3 s).
-    punchZoomRef.current *= 0.88;
+    punchZoomRef.current *= cfg.punchIn.decay;
     if (punchZoomRef.current < 0.002) punchZoomRef.current = 0;
 
-    // Décroissance du flash (frame-synced).
+    // Décroissance du voile de coupe (frame-synced).
     if (flashRef.current) {
-      flashOpacityRef.current *= 0.82;
+      flashOpacityRef.current *= cfg.cutFlash.decay;
       if (flashOpacityRef.current < 0.01) flashOpacityRef.current = 0;
       flashRef.current.style.opacity = String(flashOpacityRef.current);
     }
-  }, [activateSegment]);
+  }, [activateSegment, prepareNextAfter]);
 
   useEffect(() => {
     renderFrameRef.current = renderFrame;
@@ -499,6 +598,10 @@ export function useMontage() {
     if (segs.length > 0 && segs[0].start > 0) {
       segs = [{ ...segs[0], start: 0 }, ...segs.slice(1)];
     }
+
+    // En zone low, une coupe sur N devient un fondu enchaîné (présentation
+    // uniquement — l'EDL ne change pas).
+    segs = assignTransitions(segs, effectsRef.current.crossfade.everyNth);
 
     const durs = clips.map((c) => clipDurations.get(c.id));
     setSegments(computeInPoints(segs, durs, analysis.duration));

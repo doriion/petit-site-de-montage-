@@ -42,16 +42,22 @@ npm run lint                 # ESLint (next/core-web-vitals)
      son énergie moyenne et sa zone (base de la future couche apprentissage).
 2. **`lib/preview.ts`** — pont EDL → preview : `computeInPoints()` donne à
    chaque segment son point d'entrée dans le clip (proportionnel à la position
-   dans le morceau), `findSegmentIndex()` suit le segment actif.
-3. **`lib/player.ts`** — lecture par segment en **double-buffer** : le slot
+   dans le morceau), `findSegmentIndex()` suit le segment actif,
+   `assignTransitions()` marque une coupe low sur deux en fondu enchaîné.
+3. **`lib/effects.ts`** — vocabulaire d'effets piloté par l'énergie, regroupé
+   dans une config (base des futurs « packs ») : flash blanc bref à l'entrée
+   en zone high, micro-secousse + punch-in sur les coupes high, fondu
+   enchaîné rapide (~250 ms) sur une coupe low sur deux. Sobre par principe :
+   les effets marquent les moments forts.
+4. **`lib/player.ts`** — lecture par segment en **double-buffer** : le slot
    courant joue (seeké à son `inPoint`), l'autre slot précharge + seek le clip
    du segment suivant pendant ce temps → coupe instantanée, et jamais plus de
    2 vidéos actives (les vignettes ne jouent jamais).
-4. **`hooks/useMontage.ts`** — branche le tout au DOM : décodage, analyse,
+5. **`hooks/useMontage.ts`** — branche le tout au DOM : décodage, analyse,
    et une boucle `requestAnimationFrame` qui lit `audio.currentTime` comme
    horloge maître et dessine le slot courant sur le canvas (playhead/canvas
    écrits en DOM direct, pas de `setState` à 60 fps).
-5. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
+6. **`components/`** — `MontageStudio` (orchestration), `Stage` (canvas +
    timeline), `Controls` (sliders), `ClipTray` (vignettes), `Dropzone`.
 
 ## Réglages
